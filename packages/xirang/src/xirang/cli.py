@@ -340,12 +340,20 @@ def _build_leaf(args, pkg) -> int:
     nums = [str(vals[k].value) for k, d in pkg.knobs().items() if d["kind"] == "param"]
     kind = "Bare" if bare else "Wrap"
     top_mod = f"mk{cap}{kind}_{'_'.join(nums) if nums else '0'}"
-    want, _ = price(pkg, vals)
-    if not bare:
-        # 扁平顶层比 IP 本体多一个总线绑定器，那笔钱记在实现它的包上
-        want += _bus_price(pkg, _index(_search(args)))
+    # 还没有价目表的包也得能量——不然就成了「想量它先得有它」。
+    # 装配那一层才不许缺价目表：那里是在报总数，缺一块就是在骗人。
+    try:
+        want, _ = price(pkg, vals)
+        if not bare:
+            # 扁平顶层比 IP 本体多一个总线绑定器，那笔钱记在实现它的包上
+            want += _bus_price(pkg, _index(_search(args)))
+    except Bad:
+        want = None
     print(f"生成于 {out}")
-    print(f"  顶层 {top_mod}   预测面积 {want:,.2f} µm²")
+    if want is None:
+        print(f"  顶层 {top_mod}   还没有价目表，这次只测不比")
+    else:
+        print(f"  顶层 {top_mod}   预测面积 {want:,.2f} µm²")
     if args.no_synth:
         print("  (--no-synth，跳过综合)")
         return 0
@@ -356,6 +364,9 @@ def _build_leaf(args, pkg) -> int:
     if got is None:
         print("  综合未跑通", file=sys.stderr)
         return 1
+    if want is None:
+        print(f"  实测面积 {got:,.2f} µm²")
+        return 0
     err = (got - want) / got * 100 if got else 0
     print(f"  实测面积 {got:,.2f} µm²   预测偏差 {err:+.2f}%")
     return 0

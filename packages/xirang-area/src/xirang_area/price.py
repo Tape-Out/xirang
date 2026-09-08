@@ -83,6 +83,12 @@ def price(pkg: Pkg, vals, lift: bool = True) -> tuple[float, dict[str, float]]:
     hit = measured(pkg, vals)
     if hit is not None:
         return hit, per_knob
+    # 没有价目表的包此前静默算成零。soc-linux 的核就这么被漏掉了——
+    # 面板报 9,801，实际近 60,000，而它一声不吭。「不认识的键必须报错」
+    # 同样适用于「没量过的面积」：答不出来就得说答不出来。
+    if not area.get("base"):
+        raise Bad(f"{pkg.name} 没有价目表，面积算不出来——"
+                  f"先跑一次 xirang build --neutral 把它量出来")
     total = _term(area.get("base"), vals)
 
     for fn, f in (pkg.ip.get("features") or {}).items():

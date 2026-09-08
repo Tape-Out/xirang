@@ -127,3 +127,6 @@ include = [
   "fusesoc/vlnv.py",
 ]
 rules.unresolved-import = "ignore"
+
+[tool.uv.workspace]
+members = ["packages/*"]

@@ -1,121 +1,55 @@
-# FuseSoC
+# XiRang · 息壤
 
-[![CI status](https://github.com/olofk/fusesoc/workflows/CI/badge.svg)](https://github.com/olofk/fusesoc/actions?query=workflow%3ACI)
-[![image](https://img.shields.io/pypi/dm/fusesoc.svg?label=PyPI%20downloads)](https://pypi.org/project/fusesoc/)
+Package manager and assembler for hardware. Cargo-style manifests, kconfig-style options,
+and a measured area price on every feature.
 
-## Introduction
+![status](https://img.shields.io/badge/status-mvp-yellow) ![license](https://img.shields.io/badge/license-BSD--2--Clause-blue)
 
-FuseSoC is an award-winning package manager and a set of build tools for
-HDL (Hardware Description Language) code.
+息壤是自己生长的土壤，越用越厚。仓库是土壤，IP 在上面长。
 
-Its main purpose is to increase reuse of IP (Intellectual Property)
-cores and be an aid for creating, building and simulating SoC solutions.
+```
+xirang build soc-mcu          # 两份 YAML 走到 GDS-ready 的网表与面积
+xirang config soc-mcu         # computed 面板：每个旋钮最终值、来历、花了多少面积
+xirang config --why gpio0.irq # 单条旋钮的完整来源链
+xirang tree soc-mcu           # 装配层次
+xirang export -o resolved.yaml
+```
 
-FuseSoC makes it easier to
+短命令 `ran` 与 `xirang` 等价。
 
--   reuse existing cores
--   create compile-time or run-time configurations
--   run regression tests against multiple simulators
--   port designs to new targets
--   let other projects use your code
--   set up continuous integration
--   generate FPGA SBOMs (through the spdxgen filter)
+## 它解决什么
 
-To learn more about FuseSoC head over to the
-[User Guide](https://fusesoc.readthedocs.io/en/stable/user).
+配置层叠在别的构建系统里是个黑箱——最终值是多少、被谁决定的，没人说得清。浏览器的
+computed style 面板早就把这件事解决了，我们照搬：**每个旋钮都答得出「最终值 · 谁定的
+（层/文件/行）· 被压掉的候选 · 是否被约束强制 · 花了多少面积」**。最后一列是硬件独有的。
 
-## Getting started
+设计取自八个来源，各管一层，互不覆盖：cargo 的包与依赖模型、kconfig 的旋钮约束、
+meson 的「清单只准是数据」、uv 与 venv 的复现与工具链锁定、git 的获取、make 与 cmake
+的增量与消费。三条原则让它们协调而不是打架：
 
-### Installing the latest release
+- **一个数据模型**：所有面向外部的格式都是它的投影，不是并列的第二真相
+- **一条执行路径**：别人的格式一律是导出目标，不在运行时路径上
+- **钩子只能往下游加产物，不能往上游改取值**——否则面板那五问就答不了
 
-FuseSoC works on Linux, Windows, and macOS. It is written in Python and can be
-installed like any other Python package through "pip". Please refer to the
-full list of system requirements and installation instructions in the
-[Installation section in the User Guide](https://fusesoc.readthedocs.io/en/stable/user/installation.html).
+## 规范与实现是分开的
 
-### Quick start
+清单格式定义在 [`Tape-Out/spec`](https://github.com/Tape-Out/spec)，独立定版。
+本仓是它的一个实现，任何人都可以写另一个。IP 仓依赖的是规范，不是工具。
 
-To check if FuseSoC is working, and to get an initial feeling for how FuseSoC
-works, you can try to simulate a simple hardware design from our core library.
+## 包
 
-First, create and enter an empty workspace
+| 包 | 管什么 |
+| :--: | :-- |
+| `xirang-core` | 清单 · 层叠 · 约束求解 · 依赖与锁 |
+| `xirang-gen` | 生成器：regmap→BSV/C头 · 装配→顶层 BSV |
+| `xirang-area` | 价目表 · 预测 · CI 回填 |
+| `xirang-back` | 后端：ecc · fusesoc/kconfig/tar 导出 |
+| `xirang` | CLI |
 
-    mkdir workspace
-    cd workspace
+## 现状
 
-Install the FuseSoc base library into the workspace
+MVP 竖切已通：`xirang build soc-mcu` 从两份 YAML 走到 `ecc` 出面积，四条判据全绿——
+网表出得来 · `config --why` 答得出五问 · export 再 build 产物逐位相同 ·
+装配包里零自有 RTL。面积预测与实测差 **+1.25%，且偏保守**。
 
-    fusesoc library add fusesoc-cores https://github.com/fusesoc/fusesoc-cores
-
-Get a list of cores found in the workspace
-
-    fusesoc core list
-
-If you have any of the supported simulators installed, you can try to
-run a simulation on one of the cores as well. For example,
-`fusesoc run --target=sim i2c` will run a regression test on the core
-i2c with Icarus Verilog. If you want to try another simulator instead,
-add e.g. `--tool=modelsim` or `--tool=xcelium` between `run` and `i2c`.
-
-`fusesoc --help` will give you more information on commands and switches.
-
-Did it work? Great! FuseSoC can be used to create FPGA images, perform
-linting, manage your IP libraries or do formal verification as well.
-Check out the [online documentation](https://fusesoc.readthedocs.io/en/stable/)
-to learn more about creating your own core files and using
-existing ones. If it didn't work, please get in touch (see below).
-
-## Next steps
-
-A good way to get your first hands-on experience with FuseSoC is to
-contribute to the [LED to Believe](https://github.com/fusesoc/blinky)
-project. This project aims to used FuseSoC to blink a LED on every
-available FPGA development board in existence. There are already around
-40 different boards supported. If your board is already supported,
-great, then you can run your first FuseSoC-based design. If it's not
-supported, great, you now have the chance to add it to the list of
-supported boards. Either way, head over to [LED to
-Believe](https://github.com/fusesoc/blinky) to learn more and see how to
-go from a blinking LED to running a RISC-V core on an FPGA.
-
-## Need help?
-
-FuseSoC comes with extensive
-[online documentation](https://fusesoc.readthedocs.io/en/stable/index.html).
-
-For quick communication with the active developers, feel free to join us at the
-[FuseSoC chat](https://gitter.im/librecores/fusesoc).
-
-If you have found an issue, or want to know more about currently known problems,
-check out the
-[issue tracker on GitHub](https://github.com/olofk/fusesoc/issues).
-
-If you are looking for professional paid support, we are happy to
-provide feature additions, bug fixes, user training, setting up core
-libraries, migrating existing designs to FuseSoC and other things.
-Please contact <olof.kindgren@gmail.com> for more information.
-
-## Contributing to FuseSoC
-
-FuseSoC is developed by an active and friendly community, and you're welcome to
-join! You can read more about setting up a development environment in our
-[Developer's Guide](https://fusesoc.readthedocs.io/en/latest/dev/index.html).
-
-You can file bug reports and propose changes in the [olofk/fusesoc repository on GitHub](https://github.com/olofk/fusesoc).
-
-## Further reading
-
-* A Scalable Approach to IP Management with FuseSoC [paper](https://osda.gitlab.io/19/kindgren.pdf) and [slides](https://osda.gitlab.io/19/kindgren-slides.pdf) from OSDA 2019
-* Antmicro blog post on [how to use FuseSoC as a linter](https://antmicro.com/blog/2020/04/systemverilog-linter-and-formatter-in-fusesoc/)
-* [FuseSoC-related posts on the Tales from Beyond the Register Map blog](https://blog.award-winning.me/search/label/FuseSoC)
-* [Presentation from RISC-V Week 2022](https://www.award-winning.me/fusesoc-rvweek22)
-* [Presentation from Latch-Up Portland 2019](https://www.youtube.com/watch?v=7eWRAOK9mns)
-* [Presentation from WOSH 2019](https://www.youtube.com/watch?v=HOFYplIBSWM)
-* [Presentation from ORConf 2017](https://www.youtube.com/watch?v=iPpT9k_H67k)
-* [Presentation from ORConf 2016](https://www.youtube.com/watch?v=pKlJWe_HKPM)
-
-## License
-
-FuseSoC is licensed under the permissive 2-clause BSD license, freely allowing
-use, modification, and distribution of FuseSoC for all kinds of projects.
-Please refer to the [LICENSE](LICENSE) file for details.
+尚未实现：注册表 · 并行 DAG 与增量构建 · `wrap/` 生成 · fusesoc/kconfig/tar 三个导出 · CI。

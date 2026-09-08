@@ -50,7 +50,10 @@ def bsv_to_verilog(out: pathlib.Path, top: str, src_dirs: list[str],
         top_src = next((s for s in srcs if s.stem.endswith("Pkg")), None)
     if top_src is None:
         return None
-    r = _run(["bsc", "-verilog", "-u", "-vdir", str(rtl), "-bdir", str(build),
+    # bsc 的默认栈按小设计定的：eswitch 四口十六条学习表就把它撑爆了
+    # （Stack space overflow，报在代码生成阶段）。加栈是唯一的办法。
+    r = _run(["bsc", "+RTS", "-K512m", "-RTS",
+              "-verilog", "-u", "-vdir", str(rtl), "-bdir", str(build),
               "-info-dir", str(build), "-p", path, "-g", top, str(top_src)])
     if r.returncode != 0:
         print(r.stdout[-2500:] or r.stderr[-2500:])

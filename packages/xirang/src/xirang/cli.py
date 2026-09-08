@@ -5,18 +5,23 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import pathlib
+import shutil
+import subprocess
 import sys
 
 import yaml
 
 from xirang_area.price import annotate, model_note, price, stale
 from xirang_back.ecc import synth
+from xirang_back.sim import schedule, sim
 from xirang_back.export import to_core, to_kconfig, to_tar
 from xirang_core.lock import (check_submodules, make_lock, resolve_deps,
                               verify_lock, write_lock)
 from xirang_core.manifest import Bad, Pkg
+from xirang_core.matrix import points
 from xirang_core.model import LAYERS, Resolved
 from xirang_core.resolve import resolve, resolve_pkg
 from xirang_gen.assemble import addr_map, assemble
@@ -453,6 +458,159 @@ def _from_doc(doc, search) -> Resolved:
     return res
 
 
+# ---------------------------------------------------------------- test
+
+def _tb_gens(pkg: Pkg) -> list[pathlib.Path]:
+    d = pkg.root / "tb"
+    return sorted(d.glob("mk*.py")) if d.is_dir() else []
+
+
+def _run_gens(pkg: Pkg, dest: pathlib.Path, lbl: str, knobs: dict) -> str | None:
+    """跑各仓自己的测试台生成脚本。
+
+    第二个参数是这一点的旋钮，认矩阵的脚本会照它改名与改期望，不认的照旧
+    生成同一份——内容一模一样的点不重复跑，于是「把测试台升级成认矩阵的」
+    是一处纯局部的改动，不牵动工具。
+    """
+    dest.mkdir(parents=True, exist_ok=True)
+    arg = json.dumps({"label": lbl, "knobs": knobs}, ensure_ascii=False)
+    for g in _tb_gens(pkg):
+        r = subprocess.run([sys.executable, str(g), str(dest), arg],
+                           cwd=str(g.parent), capture_output=True, text=True)
+        if r.returncode != 0:
+            return f"{g.name} 没跑成：{(r.stdout + r.stderr)[-800:]}"
+    return None
+
+
+def _digest(d: pathlib.Path) -> str:
+    h = hashlib.sha256()
+    for f in sorted(d.glob("*.bsv")):
+        h.update(f.name.encode())
+        h.update(f.read_bytes())
+    return h.hexdigest()[:16]
+
+
+def cmd_test(args) -> int:
+    """把一个 IP 在整张矩阵上验一遍：调度门禁、寄存器一致性、各仓自己的行为测试。"""
+    index = _index(_search(args))
+    if args.top not in index:
+        raise Bad(f"找不到包 {args.top}")
+    pkg = index[args.top]
+    if pkg.is_library:
+        raise Bad(f"{args.top} 是库包，没有旋钮，也就没有矩阵")
+    if pkg.is_assembly:
+        raise Bad(f"{args.top} 是装配。装配的矩阵是各实例矩阵的乘积，本版不做")
+
+    out = pathlib.Path(args.out or "test").resolve()
+    if out.exists() and args.clean:
+        shutil.rmtree(out)
+    (out / "bsv").mkdir(parents=True, exist_ok=True)
+    (out / "sw").mkdir(parents=True, exist_ok=True)
+    # 寄存器组本身不随配置变——配置是例化时给的，所以只生成一次
+    if pkg.regmap:
+        gen_regmap(pkg, out / "bsv", out / "sw")
+    src = [str(q.root / "bsv") for q in index.values() if (q.root / "bsv").exists()]
+    work = out / "b"
+    work.mkdir(parents=True, exist_ok=True)
+    has_bsv = (pkg.root / "bsv").is_dir()
+    cap = pkg.name[:1].upper() + pkg.name[1:]
+
+    pts = points(pkg)
+    if args.point:
+        pts = [x for x in pts if x[0] == args.point]
+        if not pts:
+            raise Bad(f"矩阵里没有叫 {args.point} 的点")
+    print(f"{BOLD}{pkg.name}{OFF}  矩阵 {len(pts)} 点")
+
+    rows, failed, seen, tbseen = [], 0, {}, {}
+    for lbl, ov, hand in pts:
+        try:
+            vals = resolve_pkg(pkg, {}, f"{pkg.path} (default)", None, ov)
+        except Bad as ex:
+            # 派生出来的点撞上约束是意料之中；手写的点撞上就是人写错了
+            if hand:
+                raise
+            rows.append((lbl, "略", f"约束不允许：{ex}"))
+            continue
+        key = tuple(sorted((k, repr(v.value)) for k, v in vals.items()))
+        if key in seen:
+            rows.append((lbl, "同", f"解析下来与 {seen[key]} 是同一点"))
+            continue
+        seen[key] = lbl
+
+        knobs = {k: v.value for k, v in vals.items()}
+        notes, bad = [], False
+
+        if has_bsv:
+            f = out / "bsv" / f"{cap}Bare{lbl}.bsv"
+            f.write_text(neutral(pkg, vals, lbl), encoding="utf-8")
+            nums = [str(vals[k].value) for k, d in pkg.knobs().items()
+                    if d["kind"] == "param"]
+            top = f"mk{cap}Bare{lbl}_{'_'.join(nums) if nums else '0'}"
+            path = ":".join([str(out / "bsv"), *src]) + ":+"
+            ok, hits, log = schedule(top, f, path, work)
+            if not ok:
+                bad = True
+                notes.append("调度：" + (",".join(hits) if hits
+                                         else _first_err(log)))
+
+        if pkg.regmap:
+            txt = regs_tb(pkg, vals, lbl)
+            if txt:
+                f = out / "bsv" / f"{cap}RegsTb{lbl}.bsv"
+                f.write_text(txt, encoding="utf-8")
+                path = ":".join([str(out / "bsv"), *src]) + ":+"
+                ok, o = sim(f"mk{cap}RegsTb{lbl}", f, path, work)
+                if not ok:
+                    bad = True
+                    notes.append("寄存器：" + _tail(o))
+
+        if _tb_gens(pkg) and not args.no_self:
+            d = out / "tb" / lbl
+            err = _run_gens(pkg, d, lbl, knobs)
+            if err:
+                bad, _ = True, notes.append(err)
+            else:
+                dg = _digest(d)
+                if dg in tbseen:
+                    notes.append(f"行为测试与 {tbseen[dg]} 逐字节相同，不重跑")
+                else:
+                    tbseen[dg] = lbl
+                    path = ":".join([str(out / "bsv"), str(d), *src]) + ":+"
+                    for f in sorted(d.glob("*Tb.bsv")):
+                        ok, o = sim(f"mk{f.stem}", f, path, work)
+                        if not ok:
+                            bad = True
+                            notes.append(f"{f.stem}：" + _tail(o))
+
+        failed += bad
+        rows.append((lbl, "✘" if bad else "✔",
+                     "；".join(notes) if notes else
+                     " ".join(f"{k}={v}" for k, v in sorted(knobs.items()))))
+
+    w = max(len(r[0]) for r in rows)
+    for lbl, mark, note in rows:
+        col = "" if mark in ("略", "同") else (BOLD if mark == "✘" else "")
+        print(f"  {col}{mark}{OFF} {lbl:<{w}}  {DIM if mark in ('略', '同') else ''}"
+              f"{note}{OFF}")
+    ran = sum(1 for r in rows if r[1] in ("✔", "✘"))
+    print()
+    print(f"{ran} 点实测，{failed} 点不过")
+    return 1 if failed else 0
+
+
+def _first_err(log: str) -> str:
+    for line in log.splitlines():
+        if "Error" in line or "Warning" in line:
+            return line.strip()[:160]
+    return "编译没过"
+
+
+def _tail(o: str) -> str:
+    lines = [x for x in o.strip().splitlines() if x.strip()]
+    return " / ".join(lines[-2:])[:200] if lines else "没有输出"
+
+
 # ---------------------------------------------------------------- main
 
 def main(argv=None) -> int:
@@ -494,6 +652,14 @@ def main(argv=None) -> int:
 
     li = sub.add_parser("lint", help="检查依赖与锁文件")
     common(li); li.set_defaults(fn=cmd_lint)
+
+    ts = sub.add_parser("test", help="把 IP 在整张测试矩阵上验一遍")
+    common(ts)
+    ts.add_argument("-o", "--out")
+    ts.add_argument("--point", help="只跑矩阵里的某一个点")
+    ts.add_argument("--no-self", action="store_true", help="跳过各仓自己的行为测试")
+    ts.add_argument("--clean", action="store_true", help="先清掉输出目录")
+    ts.set_defaults(fn=cmd_test)
 
     b = sub.add_parser("build", help="生成并综合")
     common(b)

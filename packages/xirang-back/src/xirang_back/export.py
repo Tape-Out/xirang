@@ -139,7 +139,8 @@ def to_tar(res: Resolved, pkgs, build_dir: pathlib.Path, out: pathlib.Path,
                 continue
             src = p.root / "bsv"
             if src.is_dir():
-                for f in sorted(src.glob("*.bsv")):
+                for f in sorted(list(src.glob("*.bsv"))
+                                + list(src.glob("*.bs"))):
                     tf.add(f, arcname=f"{res.top}/bsv/{f.name}")
                     n += 1
             for m in ("ip.yaml", "regmap.yaml"):

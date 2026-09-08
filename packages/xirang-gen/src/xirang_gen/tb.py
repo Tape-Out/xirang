@@ -24,7 +24,7 @@ def _mask(f) -> int:
     return ((1 << int(f["w"])) - 1) << f["lo"] if str(f["w"]).isdigit() else 0
 
 
-def regs_tb(pkg: Pkg, vals) -> str:
+def regs_tb(pkg: Pkg, vals, suffix: str = "") -> str:
     spec = pkg.regmap
     if not spec:
         raise Bad(f"{pkg.name} 没有 regmap.yaml")
@@ -90,7 +90,7 @@ def regs_tb(pkg: Pkg, vals) -> str:
     targs = ", ".join([str(aw), str(dw)] + nums)
     cfg = f"{C}RegsCfg {{ {args} }}" if args else ""
 
-    return f"""package {C}RegsTb;
+    return f"""package {C}RegsTb{suffix};
 
 // 由 xirang 从 regmap.yaml 生成，勿手改。
 
@@ -113,7 +113,7 @@ function Chk chk(Integer i);
 endfunction
 
 (* synthesize *)
-module mk{C}RegsTb(Empty);
+module mk{C}RegsTb{suffix}(Empty);
   {C}RegsIfc#({targs}) r <- mk{C}Regs({cfg});
 
   Reg#(Bit#(16)) step <- mkReg(0);

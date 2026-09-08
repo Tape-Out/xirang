@@ -157,7 +157,7 @@ def gen_digest(pkg: Pkg) -> str | None:
     # 当初要防的「悄悄失效」。
     src = pkg.root / "bsv"
     if src.is_dir():
-        for f in sorted(src.glob("*.bsv")):
+        for f in sorted(list(src.glob("*.bsv")) + list(src.glob("*.bs"))):
             parts.append(f.read_text(encoding="utf-8"))
     return "sha256:" + hashlib.sha256("".join(parts).encode()).hexdigest()[:16]
 

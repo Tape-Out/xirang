@@ -49,6 +49,12 @@ def where(node, key: str, path: str) -> str:
 
 CTRL_SHAPES = {"flat", "server", "none"}
 
+# 顶层键的白名单。写错一个键就被默默忽略，比报错糟得多——
+# 「area」写成「areas」，价目表整个失效而没人知道。
+TOP_KEYS = {"name", "version", "spec", "kind", "lang", "identity", "contract",
+            "params", "features", "constraints", "area", "emit", "deps",
+            "bus", "instances", "test", "__path__"}
+
 
 class Pkg:
     """一个包的清单。有 instances 就是装配，没有就是叶子 IP。"""
@@ -77,6 +83,9 @@ class Pkg:
 
     def _check(self):
         ip = self.ip
+        unknown = set(ip) - TOP_KEYS
+        if unknown:
+            raise Bad(f"{self.path}: 不认识的顶层键 {sorted(unknown)}")
         for k in ("name", "version", "spec"):
             if k not in ip:
                 raise Bad(f"{self.path} 缺 {k}")

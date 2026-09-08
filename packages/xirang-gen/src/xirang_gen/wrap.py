@@ -138,11 +138,13 @@ def wrap(pkg: Pkg, vals) -> str:
     return "\n".join(L) + "\n"
 
 
-def neutral(pkg: Pkg, vals) -> str:
+def neutral(pkg: Pkg, vals, suffix: str = "") -> str:
     """中立顶层：只有契约与自有引脚，不含总线。
 
     价目表量的就是这一层。量包装层会把绑定器算进每一个 IP，而装配里整颗芯片
     只有一个绑定器，于是译码项算出负数——那是模型错了，不是工具错了。
+
+    suffix 给矩阵测试用：同一个 IP 的多个配置点要共处一次编译，包名就得各不相同。
     """
     s = _shape(pkg, vals)
     b, cap = s["b"], s["cap"]
@@ -151,7 +153,7 @@ def neutral(pkg: Pkg, vals) -> str:
     # 引到顶层会让「规则用」与「外面用」抢同一个方法，规则于是永不触发。
     none = (((pkg.ip.get("contract") or {}).get("ctrl") or {})
             .get("shape") == "none")
-    ifc = [f"interface {cap}BareIfc;"]
+    ifc = [f"interface {cap}Bare{suffix}Ifc;"]
     if not none:
         ifc.append(f"  interface RegIf#({s['aw']}, {s['dw']}) {s['ctrl_name']};")
     ifc += [f"  interface {x['type']}{sub_targs(x, vals, pkg.name)} {x['name']};"
@@ -168,7 +170,7 @@ def neutral(pkg: Pkg, vals) -> str:
     body += [f"  method {irq_type(w, vals)} {n} = m.{n};" for n, w in s["irqs"]]
 
     L = [
-        f"package {cap}Bare;",
+        f"package {cap}Bare{suffix};",
         "",
         "// 由 ip.yaml 的 emit 段生成，勿手改。中立顶层：价目表量的就是这一层。",
         "",
@@ -179,7 +181,7 @@ def neutral(pkg: Pkg, vals) -> str:
         "",
         "(* synthesize *)",
         '(* default_clock_osc = "clk", default_reset = "rst_n" *)',
-        f"module mk{cap}Bare_{s['tag']}({cap}BareIfc);",
+        f"module mk{cap}Bare{suffix}_{s['tag']}({cap}Bare{suffix}Ifc);",
         *body,
         "endmodule",
         "",

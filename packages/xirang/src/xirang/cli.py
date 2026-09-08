@@ -13,6 +13,7 @@ import yaml
 
 from xirang_area.price import annotate, model_note, stale
 from xirang_back.ecc import synth
+from xirang_back.export import to_core, to_kconfig, to_tar
 from xirang_core.lock import (check_submodules, make_lock, resolve_deps,
                               verify_lock, write_lock)
 from xirang_core.manifest import Bad, Pkg
@@ -227,9 +228,31 @@ def _to_doc(res: Resolved) -> dict:
 
 
 def cmd_export(args) -> int:
-    res, _ = _resolve(args)
-    doc = _to_doc(res)
-    txt = yaml.safe_dump(doc, sort_keys=False, allow_unicode=True)
+    res, pkgs = _resolve(args)
+    fmt = args.format or "resolved"
+
+    if fmt == "tar":
+        # tar 要有生成物才装得进去，所以先跑一遍不综合的 build
+        build = pathlib.Path(args.build or "build").resolve()
+        if not (build / "bsv").is_dir():
+            raise Bad(f"{build} 里没有生成物——先跑一次 xirang build --no-synth")
+        top_mod = "mk" + "".join(w.capitalize()
+                                 for w in res.top.replace("-", "_").split("_"))
+        out = pathlib.Path(args.out or f"{res.top}.tar.gz")
+        n = to_tar(res, pkgs, build, out, top_mod)
+        print(f"{out}  {n} 个源文件，解开后只要 bsc 就能重跑")
+        return 0
+
+    if fmt == "core":
+        build = pathlib.Path(args.build or "build").resolve()
+        files = sorted(f.name for f in (build / "rtl").glob("*.v")) \
+            if (build / "rtl").is_dir() else []
+        txt = to_core(res, pkgs, files)
+    elif fmt == "kconfig":
+        txt = to_kconfig(res, pkgs)
+    else:
+        txt = yaml.safe_dump(_to_doc(res), sort_keys=False, allow_unicode=True)
+
     if args.out:
         pathlib.Path(args.out).write_text(txt, encoding="utf-8")
         print(args.out)
@@ -353,7 +376,13 @@ def main(argv=None) -> int:
     common(wr); wr.add_argument("-o", "--out"); wr.set_defaults(fn=cmd_wrap)
 
     e = sub.add_parser("export", help="导出可再导入的完整配置")
-    common(e); e.add_argument("-o", "--out"); e.set_defaults(fn=cmd_export)
+    common(e)
+    e.add_argument("-o", "--out")
+    e.add_argument("-f", "--format",
+                   choices=["resolved", "core", "kconfig", "tar"],
+                   help="导出目标。别人的格式一律是导出目标，不在执行路径上")
+    e.add_argument("--build", help="tar 与 core 要读的生成物目录")
+    e.set_defaults(fn=cmd_export)
 
     lk = sub.add_parser("lock", help="解析依赖并钉住")
     common(lk); lk.add_argument("-o", "--out"); lk.set_defaults(fn=cmd_lock)

@@ -612,8 +612,15 @@ def _first_err(log: str) -> str:
 
 
 def _tail(o: str) -> str:
-    lines = [x for x in o.strip().splitlines() if x.strip()]
-    return " / ".join(lines[-2:])[:200] if lines else "没有输出"
+    # 先挑失败那几行。只取末尾会把更早的失败截掉——一次跑出三条，
+    # 报告里只剩最后一条，人就以为只错了那一处。
+    lines = [x.strip() for x in o.strip().splitlines() if x.strip()]
+    hits = [x for x in lines if x.startswith(("FAIL", "TIMEOUT", "Error"))]
+    pick = hits[:3] if hits else lines[-2:]
+    s = " / ".join(pick)
+    if hits and len(hits) > 3:
+        s += f"（另有 {len(hits) - 3} 条）"
+    return s[:400] if lines else "没有输出"
 
 
 # ---------------------------------------------------------------- main

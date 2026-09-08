@@ -132,7 +132,8 @@ def cmd_lock(args) -> int:
     resolved = resolve_deps(top, index)
     root = search[0]
     lock = make_lock(top, resolved, root)
-    out = pathlib.Path(args.out or (root / "xirang.lock"))
+    # 锁跟着装配走，不是跟着工作区走：装配是交付物，锁是它的一部分
+    out = pathlib.Path(args.out or (top.root / "xirang.lock"))
     write_lock(lock, out)
     print(f"{out}  锁定 {len(lock['packages'])} 个包")
     for p in lock["packages"]:
@@ -146,7 +147,9 @@ def cmd_lint(args) -> int:
     top = _top_pkg(args, index)
     resolved = resolve_deps(top, index)
     problems = check_submodules(search[0], resolved)
-    lockf = search[0] / "xirang.lock"
+    lockf = top.root / "xirang.lock"
+    if not lockf.exists():
+        lockf = search[0] / "xirang.lock"
     notes = []
     lock = yaml.safe_load(lockf.read_text(encoding="utf-8")) if lockf.exists() else None
     if lock and lock.get("top") == top.name:
@@ -358,8 +361,11 @@ def cmd_build(args) -> int:
 
     if getattr(args, "locked", False):
         index = _index(search)
+        lf = index[res.top].root / "xirang.lock"
+        if not lf.exists():
+            lf = search[0] / "xirang.lock"
         problems = verify_lock(
-            yaml.safe_load((search[0] / "xirang.lock").read_text(encoding="utf-8")),
+            yaml.safe_load(lf.read_text(encoding="utf-8")),
             resolve_deps(index[res.top], index))
         if problems:
             for p in problems:

@@ -146,17 +146,17 @@ def gen_digest(pkg: Pkg) -> str | None:
     手工维护版本号两头不讨好：忘了升是漏报，升了没改输出是误报（0.4 只加了
     一条校验，输出与 0.3 逐字节相同，却报了过期）。对**产物**取摘要，两种错都没有。
     """
-    if not pkg.regmap:
-        return None
     import hashlib
 
     from xirang_core.resolve import resolve_pkg
     from xirang_gen.regmap import bsv
     from xirang_gen.wrap import flat_emit, wrap
-    parts = [bsv(pkg)]
+    # 没有寄存器图的 IP 也要有摘要。原来一见 regmap 为空就返回 None，
+    # 于是 sram 这种纯手写的 IP 完全没有失效检测——改了实现，价目表照旧。
+    parts = [bsv(pkg)] if pkg.regmap else []
     # 包装层也是生成的，也进面积。只取默认配置那一份即可——
     # 生成器一变，这一份就跟着变。
-    if flat_emit(pkg) is not None:
+    if pkg.regmap and flat_emit(pkg) is not None:
         parts.append(wrap(pkg, resolve_pkg(pkg, {}, "digest", None, {})))
     # 手写的源码也要进摘要。只看生成物的话，改了 IP 自己的逻辑（uart 的取数、
     # spi 的采样、timer 的比较）面积明明变了却没人报警——那正是这套机制
@@ -165,14 +165,17 @@ def gen_digest(pkg: Pkg) -> str | None:
     if src.is_dir():
         for f in sorted(list(src.glob("*.bsv")) + list(src.glob("*.bs"))):
             parts.append(f.read_text(encoding="utf-8"))
+    if not parts:
+        return None
     return "sha256:" + hashlib.sha256("".join(parts).encode()).hexdigest()[:16]
 
 
 def stale(pkg: Pkg) -> str | None:
     """价目表是不是对着另一份生成产物量的。是的话它已经悄悄失效了。"""
     c = (pkg.ip.get("area") or {}).get("corner") or {}
-    if not pkg.regmap:
-        return None
+    now = gen_digest(pkg)
+    if now is None:
+        return None       # 既没有寄存器图也没有源码，没什么可摘要的
     got = c.get("gen_digest")
     now = gen_digest(pkg)
     if got is None:

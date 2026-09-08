@@ -446,6 +446,13 @@ def bsv(pkg: Pkg) -> str:
                         f"else {wr} <= {v};"]
             else:
                 body = [f"if (r.write) {wr} <= truncate(applyStrb(zeroExtend({wr}), wd, r.wstrb));"]
+            # 单字段寄存器也要发脉冲。之前只有多字段那一支发了，于是
+            # wdt 的喂狗、i2c 的收发、emac 的收发长度全都收不到通知——
+            # 硬件那一侧永远等不到「软件写过了」。
+            if f["swmod"]:
+                body.append(f"if (r.write) {_sig(reg, f)}_mod.send();")
+            if f["swacc"]:
+                body.append(f"if (!r.write) {_sig(reg, f)}_acc.send();")
         arm = "\n               ".join(body)
         if reg["feat"]:
             L += [f"        {aw}'h{reg['offset']:0{hexw}X}: if (cfg.{reg['feat']}) begin",

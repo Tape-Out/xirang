@@ -79,6 +79,9 @@ def price(pkg: Pkg, vals) -> tuple[float, dict[str, float]]:
         per_knob[fn] = cost
         total += cost
 
+    m = float((pkg.ip.get("area") or {}).get("margin", 0.0))
+    if m:
+        total *= (1.0 + m)
     return total, per_knob
 
 
@@ -94,8 +97,23 @@ def annotate(res: Resolved, pkgs: dict[str, Pkg]) -> Resolved:
             s += i.area_um2
         return s
 
-    res.area_um2 = rec(res.instances)
+    root = pkgs.get(res.top)
+    own = price(root, {})[0] if root and (root.ip.get("area") or {}).get("base") else 0.0
+    res.area_um2 = own + rec(res.instances)
     return res
+
+
+def stale(pkg: Pkg) -> str | None:
+    """价目表是不是在别的生成器版本下量的。是的话，它可能已经悄悄失效了。"""
+    from xirang_gen.regmap import GEN_VERSION
+    c = (pkg.ip.get("area") or {}).get("corner") or {}
+    got = c.get("generator")
+    if got is None:
+        return f"{pkg.name} 的价目表没记生成器版本，无法判断是否失效"
+    if str(got) != GEN_VERSION:
+        return (f"{pkg.name} 的价目表是生成器 {got} 量的，现在是 {GEN_VERSION}——"
+                f"生成的逻辑变了，面积很可能已失效，重测再用")
+    return None
 
 
 def _shape(spec) -> str:
@@ -108,7 +126,9 @@ def model_note(pkg: Pkg) -> str:
     c = a.get("corner") or {}
     if not a:
         return "无价目表"
-    return (f"{a.get('model', '?')}/{_shape(a.get('base'))}，误差界 {e.get('bound', '?')}"
+    gen = c.get("generator", "?")
+    return (f"{a.get('model', '?')}/{_shape(a.get('base'))}，生成器 {gen}，"
+            f"误差界 {e.get('bound', '?')}"
             f"（{'恒为高估' if e.get('sign') == 'over' else e.get('sign', '?')}），"
             f"口径 {c.get('tool', '?')}/{c.get('pdk', '?')}@{c.get('freq_mhz', '?')}MHz"
             f" 测于 {c.get('measured', '?')}")

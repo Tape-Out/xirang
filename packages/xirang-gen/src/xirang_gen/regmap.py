@@ -11,12 +11,16 @@ import pathlib
 
 from xirang_core.manifest import Bad, Pkg
 
+# 改动会改变生成的逻辑，从而让已回填的面积失效。改生成逻辑就要进版本。
+GEN_VERSION = "0.3"
+
 SW = {"rw", "r", "w"}
 HW = {"rw", "r", "w", "na"}
 # 字段允许的键。不在表里的一律报错——静默忽略过三次，每次都生成出默默错了的硬件。
 FIELD_KEYS = {"name", "bits", "width", "desc", "sw", "hw", "onwrite", "hwset",
               "stickybit", "reset", "feature", "volatile", "swacc", "swmod"}
-REG_KEYS = {"name", "offset", "desc", "feature", "fields"}
+REG_KEYS = {"name", "offset", "desc", "feature", "fields", "array", "width", "atomic"}
+ATOMIC = {"latch-on-low"}
 
 
 def _cap(s: str) -> str:
@@ -43,7 +47,7 @@ def _bits(f, params):
     return None, 0, w
 
 
-def _rows(spec: dict, params: list[str]) -> list[dict]:
+def _rows(spec: dict, params: list[str], dw: int = 32) -> list[dict]:
     out = []
     seen: dict[int, str] = {}
     for r in spec.get("regs", []) or []:
@@ -61,6 +65,21 @@ def _rows(spec: dict, params: list[str]) -> list[dict]:
         fs = r.get("fields") or []
         if not fs:
             raise Bad(f"{r['name']}: 没有字段")
+        arr = r.get("array")
+        if arr is not None:
+            unknown = set(arr) - {"count", "stride"}
+            if unknown:
+                raise Bad(f"{r['name']}: array 里不认识的键 {sorted(unknown)}")
+            for k in ("count", "stride"):
+                if k not in arr:
+                    raise Bad(f"{r['name']}: array 缺 {k}")
+        rw = r.get("width")
+        if rw is not None and int(rw) not in (dw, dw * 2):
+            raise Bad(f"{r['name']}: 本版寄存器宽度只支持 {dw} 或 {dw*2} 位，收到 {rw}")
+        if r.get("atomic") and r["atomic"] not in ATOMIC:
+            raise Bad(f"{r['name']}: atomic 只支持 {sorted(ATOMIC)}")
+        if r.get("atomic") and int(rw or dw) <= dw:
+            raise Bad(f"{r['name']}: 不比总线宽的寄存器不需要 atomic")
         multi = len(fs) > 1
         if multi and any("bits" not in f for f in fs):
             raise Bad(f"{r['name']}: 多字段时每个字段都要写 bits")
@@ -97,7 +116,9 @@ def _rows(spec: dict, params: list[str]) -> list[dict]:
                 "swacc": bool(f.get("swacc")), "swmod": bool(f.get("swmod")),
             })
         out.append({"name": r["name"], "offset": off, "desc": r.get("desc", ""),
-                    "feat": r.get("feature"), "multi": multi, "fields": flds})
+                    "feat": r.get("feature"), "multi": multi, "fields": flds,
+                    "arr": arr, "rw": int(rw) if rw else dw,
+                    "atomic": r.get("atomic")})
     return out
 
 
@@ -112,7 +133,8 @@ def bsv(pkg: Pkg) -> str:
     spec = pkg.regmap
     ip = spec.get("ip", pkg.name)
     params: list[str] = list(spec.get("params") or [])
-    rs = _rows(spec, params)
+    dw_i = int((spec.get("contract") or {}).get("dw", 32))
+    rs = _rows(spec, params, dw_i)
     feats = sorted({f["feat"] for r in rs for f in r["fields"] if f["feat"]}
                    | {r["feat"] for r in rs if r["feat"]})
     tparams = ", ".join(["numeric type aw", "numeric type dw"]
@@ -143,6 +165,11 @@ def bsv(pkg: Pkg) -> str:
     for reg in rs:
         for f in reg["fields"]:
             s = _sig(reg, f)
+            if reg["arr"]:
+                n = reg["arr"]["count"]
+                if f["hw"] in ("r", "rw"):
+                    L.append(f"  (* always_ready *) method Vector#({n}, Bit#({f['w']})) {s};")
+                continue
             if f["hw"] in ("r", "rw") and not f["vol"]:
                 L.append(f"  (* always_ready *) method Bit#({f['w']}) {s};")
             if f["hw"] in ("w", "rw"):
@@ -159,10 +186,13 @@ def bsv(pkg: Pkg) -> str:
     L.append(f"module mk{C}Regs{cfgarg}({C}RegsIfc#({targs}))")
     prov = ["Mul#(TDiv#(dw, 8), 8, dw)", f"Add#(_a, {aw}, aw)"]
     # zeroExtend 到 dw 的每个位宽都要一条 proviso，字面值也不例外
-    widths = sorted({f["w"] for r in rs for f in r["fields"]},
+    widths = sorted({f["w"] for r in rs for f in r["fields"]
+                     if r["rw"] <= dw_i},
                     key=lambda w: (w.isdigit(), w))
     for i, w in enumerate(widths):
         prov.append(f"Add#(_w{i}, {w}, dw)")
+    if any(r["rw"] > dw_i for r in rs):
+        prov.append(f"Add#(_h, {dw_i}, dw)")
     L += ["    provisos (" + ", ".join(prov) + ");", ""]
 
     for reg in rs:
@@ -173,11 +203,20 @@ def bsv(pkg: Pkg) -> str:
                 # 没有存储：硬件每拍驱动，总线只是读它
                 L.append(f"  Wire#(Bit#({f['w']})) {s} <- mkDWire(0);")
                 continue
+            if reg["arr"]:
+                n = reg["arr"]["count"]
+                L.append(f"  Vector#({n}, Reg#(Bit#({f['w']}))) {s} <- "
+                         f"replicateM(mkReg({init}));")
+                continue
             if f["hwset"] and f["woclr"]:
                 # 硬件置位与软件写1清除两处写，须 CReg 定序：端口0给规则、端口1给总线方法
                 L.append(f"  Reg#(Bit#({f['w']})) {s}[2] <- mkCReg(2, {init});")
             else:
                 L.append(f"  Reg#(Bit#({f['w']})) {s} <- mkReg({init});")
+    for reg in rs:
+        if reg["atomic"] == "latch-on-low":
+            # 读低半时把高半锁进影子，读高半返回影子——否则两次读之间计数器会走，读出撕裂值
+            L.append(f"  Reg#(Bit#({dw_i})) {reg['name']}_shadow <- mkReg(0);")
     for reg in rs:
         for f in reg["fields"]:
             s = _sig(reg, f)
@@ -203,10 +242,46 @@ def bsv(pkg: Pkg) -> str:
 
     L += ["  Apb4RegFile#(aw, dw) rf = interface Apb4RegFile;",
           "    method ActionValue#(Apb4Rsp#(dw)) access(Apb4Req#(aw, dw) r);",
-          "      Bit#(dw) rd = 0;", "      Bool err = False;",
-          f"      Bit#({aw}) off = truncate(r.paddr);", "      Bit#(dw) wd = r.pwdata;",
-          "      case (off)"]
+          "      Bit#(dw) rd = 0;", "      Bool err = True;   // 先假定未命中",
+          f"      Bit#({aw}) off = truncate(r.paddr);", "      Bit#(dw) wd = r.pwdata;"]
+    # 数组与宽寄存器：份数可能是参数，Python 展不开，只能生成动态索引
+    for reg in [x for x in rs if x["arr"] or x["rw"] > dw_i]:
+        f = reg["fields"][0]
+        base = reg["offset"]
+        words = reg["rw"] // dw_i
+        stride = reg["arr"]["stride"] if reg["arr"] else reg["rw"] // 8
+        cnt = reg["arr"]["count"] if reg["arr"] else 1
+        span = f"fromInteger(valueOf({cnt}))*{stride}" if isinstance(cnt, str) else f"{cnt*stride}"
+        idx = f"((off - {aw}'h{base:0{hexw}X}) / {stride})"
+        sub = f"((off - {aw}'h{base:0{hexw}X}) % {stride})" if words > 1 else "0"
+        tgt = f"{_sig(reg, f)}_r[{idx}]" if reg["arr"] else _sig(reg, f) + "_r"
+        L += [f"      if (off >= {aw}'h{base:0{hexw}X} && off < {aw}'h{base:0{hexw}X} + {span}) begin",
+              "        err = False;"]
+        if words == 1:
+            L += [f"        if (r.pwrite) {tgt} <= truncate(wd);",
+                  f"        else rd = zeroExtend({tgt});"]  # 两侧都已过渡
+        else:
+            hi = f"{tgt}[{reg['rw']-1}:{dw_i}]"
+            lo = f"{tgt}[{dw_i-1}:0]"
+            # 寄存器是字面宽度，总线是类型参数，边界上必须过渡
+            wdn = f"Bit#({dw_i})' (truncate(wd))"
+            L += [f"        Bool isHi = ({sub} >= {dw_i//8});",
+                  "        if (r.pwrite) begin",
+                  f"          if (isHi) {tgt} <= {{{wdn}, {lo}}};",
+                  f"          else      {tgt} <= {{{hi}, {wdn}}};",
+                  "        end else begin"]
+            if reg["atomic"] == "latch-on-low":
+                L += [f"          if (isHi) rd = zeroExtend({reg['name']}_shadow);",
+                      f"          else begin rd = zeroExtend({lo});"
+                      f" {reg['name']}_shadow <= {hi}; end"]
+            else:
+                L += [f"          rd = isHi ? zeroExtend({hi}) : zeroExtend({lo});"]
+            L += ["        end"]
+        L += ["      end"]
+    L += ["      case (off)"]
     for reg in rs:
+        if reg["arr"] or reg["rw"] > dw_i:
+            continue
         body = []
         if reg["multi"]:
             # 先拼当前值、套完字节选通再切回各字段——逐字段套选通会算错，
@@ -246,16 +321,21 @@ def bsv(pkg: Pkg) -> str:
         arm = "\n               ".join(body)
         if reg["feat"]:
             L += [f"        {aw}'h{reg['offset']:0{hexw}X}: if (cfg.{reg['feat']}) begin",
+                  "                 err = False;",
                   f"                 {arm}", "               end else err = True;"]
         else:
-            L.append(f"        {aw}'h{reg['offset']:0{hexw}X}: begin {arm} end")
-    L += ["        default: err = True;", "      endcase",
+            L.append(f"        {aw}'h{reg['offset']:0{hexw}X}: begin err = False; {arm} end")
+    L += ["        default: noAction;", "      endcase",
           "      return Apb4Rsp { prdata: rd, pslverr: err };",
           "    endmethod", "  endinterface;", "", "  interface regs = rf;"]
 
     for reg in rs:
         for f in reg["fields"]:
             s = _sig(reg, f)
+            if reg["arr"]:
+                if f["hw"] in ("r", "rw"):
+                    L.append(f"  method {s} = readVReg({s}_r);")
+                continue
             if f["hw"] in ("r", "rw") and not f["vol"]:
                 L.append(f"  method Bit#({f['w']}) {s} = {port(reg, f, 0)};")
             if f["hw"] in ("w", "rw"):

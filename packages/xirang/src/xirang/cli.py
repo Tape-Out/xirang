@@ -11,7 +11,7 @@ import sys
 
 import yaml
 
-from xirang_area.price import annotate, model_note
+from xirang_area.price import annotate, model_note, stale
 from xirang_back.ecc import synth
 from xirang_core.manifest import Bad, Pkg
 from xirang_core.model import LAYERS, Resolved
@@ -45,6 +45,10 @@ def _resolve(args) -> tuple[Resolved, dict[str, Pkg]]:
     res = resolve(args.top, search, cli=cli)
     pkgs = _load_all(res, search)
     annotate(res, pkgs)
+    for name in sorted({i.of for _, i in res.walk()}):
+        w = stale(pkgs[name])
+        if w:
+            print(f"\033[33m警告\033[0m {w}", file=sys.stderr)
     return res, pkgs
 
 

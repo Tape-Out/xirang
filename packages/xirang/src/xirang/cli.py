@@ -17,9 +17,10 @@ from xirang_core.lock import (check_submodules, make_lock, resolve_deps,
                               verify_lock, write_lock)
 from xirang_core.manifest import Bad, Pkg
 from xirang_core.model import LAYERS, Resolved
-from xirang_core.resolve import resolve
+from xirang_core.resolve import resolve, resolve_pkg
 from xirang_gen.assemble import addr_map, assemble
 from xirang_gen.regmap import generate as gen_regmap
+from xirang_gen.wrap import flat_emit, wrap
 
 BOLD, DIM, OFF = "\033[1m", "\033[2m", "\033[0m"
 
@@ -171,6 +172,43 @@ def cmd_tree(args) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- wrap
+
+def cmd_wrap(args) -> int:
+    """给一个叶子 IP 生成扁平端口顶层。装配没有这一层——它本身就是顶层。"""
+    search = _search(args)
+    index = _index(search)
+    if args.top not in index:
+        raise Bad(f"找不到包 {args.top}")
+    pkg = index[args.top]
+    if pkg.is_assembly:
+        raise Bad(f"{args.top} 是装配，它本身就是顶层，不需要 wrap")
+    if pkg.is_library:
+        raise Bad(f"{args.top} 是库包，不会被例化，也就没有端口")
+    if flat_emit(pkg) is None:
+        raise Bad(f"{args.top} 的 emit 里没有 verilog-flat——"
+                  f"想要独立可流片就把它加上，并选一种 bus")
+
+    cli = {}
+    for kv in args.set or []:
+        k, _, v = kv.partition("=")
+        cli[k] = yaml.safe_load(v)
+    vals = resolve_pkg(pkg, {}, f"{pkg.path} (default)", None, cli)
+
+    out = pathlib.Path(args.out or (pkg.root / "wrap"))
+    out.mkdir(parents=True, exist_ok=True)
+    cap = pkg.name[:1].upper() + pkg.name[1:]
+    txt = wrap(pkg, vals)
+    f = out / f"{cap}Wrap.bsv"
+    f.write_text(txt, encoding="utf-8")
+    # 寄存器组也要一并放过去，否则这一层独立编不了
+    gen_regmap(pkg, out, out)
+    print(f"{f}")
+    knobs = ", ".join(f"{k}={v.value}" for k, v in vals.items())
+    print(f"  {knobs}")
+    return 0
+
+
 # ---------------------------------------------------------------- export
 
 def _to_doc(res: Resolved) -> dict:
@@ -310,6 +348,9 @@ def main(argv=None) -> int:
 
     t = sub.add_parser("tree", help="装配层次")
     common(t); t.set_defaults(fn=cmd_tree)
+
+    wr = sub.add_parser("wrap", help="给叶子 IP 生成扁平端口顶层")
+    common(wr); wr.add_argument("-o", "--out"); wr.set_defaults(fn=cmd_wrap)
 
     e = sub.add_parser("export", help="导出可再导入的完整配置")
     common(e); e.add_argument("-o", "--out"); e.set_defaults(fn=cmd_export)

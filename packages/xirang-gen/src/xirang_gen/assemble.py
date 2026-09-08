@@ -57,9 +57,15 @@ def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
         if inst.addr is None:
             raise Bad(f"{inst.name} 没有地址，且它的包没有 regmap.yaml 的 base")
         span = inst.size or (1 << iaw)
-        ip_irqs = [i["name"] for i in (p.ip.get("contract") or {}).get("irq", []) or []]
-        # Device 只带一根中断线；多中断的 IP 逐根落进向量由 instances 展开时决定
-        one = (f"tagged Valid {inst.name}.{ip_irqs[0]}" if ip_irqs else "tagged Invalid")
+        ip_irqs = (p.ip.get("contract") or {}).get("irq", []) or []
+        # Device 只带一根线。多根的 IP（每核一根、每通道一根）在这里合成一根送译码，
+        # 完整的向量另行引到顶层，交给 PLIC 逐根接。
+        if not ip_irqs:
+            one = "tagged Invalid"
+        elif ip_irqs[0].get("width"):
+            one = f"tagged Valid ({inst.name}.{ip_irqs[0]['name']} != 0)"
+        else:
+            one = f"tagged Valid {inst.name}.{ip_irqs[0]['name']}"
         devs.append(f"  devs[{k}] = device({aw}'h{inst.addr:0{hexw}X}, "
                     f"{aw}'h{span:0{hexw}X}, "
                     f"narrow({inst.name}.{e.get('ctrl', 'regs')}), {one});")

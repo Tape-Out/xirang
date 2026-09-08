@@ -51,6 +51,13 @@ def sub_targs(sub: dict, vals, name: str) -> str:
     return f"#({', '.join(out)})" if out else ""
 
 
+def irq_type(w, vals) -> str:
+    """一根中断线是 Bool，多根是 Bit#(n)。n 可以写旋钮名，求解后取值。"""
+    if w is None:
+        return "Bool"
+    return f"Bit#({vals[w].value if w in vals else w})"
+
+
 def _shape(pkg: Pkg, vals):
     """两种顶层共用的那部分：类型参数、特性实参、子接口、中断。"""
     b = pkg.bsv_emit()
@@ -68,8 +75,8 @@ def _shape(pkg: Pkg, vals):
         "tag": "_".join(nums) if nums else "0",
         "subs": b.get("pins") or [],
         "ctrl_name": b.get("ctrl", "regs"),
-        "irqs": [i["name"] for i in
-                 (pkg.ip.get("contract") or {}).get("irq", []) or []],
+        "irqs": [(i["name"], i.get("width"))
+                 for i in (pkg.ip.get("contract") or {}).get("irq", []) or []],
     }
 
 
@@ -89,8 +96,9 @@ def wrap(pkg: Pkg, vals) -> str:
            f"  interface {bus['pins']}#({s['aw']}, {s['dw']}) bus;"]
     ifc += [f"  interface {x['type']}{sub_targs(x, vals, pkg.name)} {x['name']};"
             for x in s["subs"]]
-    ifc += [f'  (* always_ready, result = "{n}" *) method Bool {n};'
-            for n in s["irqs"]]
+    ifc += [f'  (* always_ready, result = "{n}" *) '
+            f'method {irq_type(w, vals)} {n};'
+            for n, w in s["irqs"]]
     ifc.append("endinterface")
 
     body = [
@@ -102,7 +110,7 @@ def wrap(pkg: Pkg, vals) -> str:
         "  interface bus = sl;",
     ]
     body += [f"  interface {x['name']} = m.{x['name']};" for x in s["subs"]]
-    body += [f"  method Bool {n} = m.{n};" for n in s["irqs"]]
+    body += [f"  method {irq_type(w, vals)} {n} = m.{n};" for n, w in s["irqs"]]
 
     L = [
         f"package {cap}Wrap;",
@@ -140,14 +148,15 @@ def neutral(pkg: Pkg, vals) -> str:
            f"  interface RegIf#({s['aw']}, {s['dw']}) {s['ctrl_name']};"]
     ifc += [f"  interface {x['type']}{sub_targs(x, vals, pkg.name)} {x['name']};"
             for x in s["subs"]]
-    ifc += [f"  (* always_ready *) method Bool {n};" for n in s["irqs"]]
+    ifc += [f"  (* always_ready *) method {irq_type(w, vals)} {n};"
+            for n, w in s["irqs"]]
     ifc.append("endinterface")
 
     body = [f"  {b['interface']}#({s['targs']}) m <- {b['module']}"
             f"({b['config_type']} {{ {s['feats']} }});",
             f"  interface {s['ctrl_name']} = m.{s['ctrl_name']};"]
     body += [f"  interface {x['name']} = m.{x['name']};" for x in s["subs"]]
-    body += [f"  method Bool {n} = m.{n};" for n in s["irqs"]]
+    body += [f"  method {irq_type(w, vals)} {n} = m.{n};" for n, w in s["irqs"]]
 
     L = [
         f"package {cap}Bare;",

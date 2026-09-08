@@ -30,8 +30,12 @@ RESERVED = {
 SW = {"rw", "r", "w"}
 HW = {"rw", "r", "w", "na"}
 # 字段允许的键。不在表里的一律报错——静默忽略过三次，每次都生成出默默错了的硬件。
-FIELD_KEYS = {"name", "bits", "width", "desc", "sw", "hw", "onwrite", "hwset",
-              "stickybit", "reset", "feature", "volatile", "swacc", "swmod"}
+FIELD_KEYS = {"name", "bits", "width", "desc", "sw", "hw", "onwrite", "onread",
+              "hwset", "stickybit", "reset", "feature", "volatile", "swacc",
+              "swmod"}
+# 读带副作用。硬件自旋锁只能这么做：取锁必须与读回同一拍完成，
+# 拆成「读一次再写一次」就有窗口，两个核会同时拿到锁。
+ONREAD = {"rset", "rclr"}
 REG_KEYS = {"name", "offset", "desc", "feature", "fields", "array", "width", "atomic"}
 ATOMIC = {"latch-on-low"}
 
@@ -118,6 +122,11 @@ def _rows(spec: dict, params: list[str], dw: int = 32) -> list[dict]:
                 raise Bad(f"{r['name']}.{f['name']}: hw={f.get('hw')} 不在 {sorted(HW)}")
             if f.get("onwrite") not in (None, "woclr"):
                 raise Bad(f"{r['name']}.{f['name']}: 本版 onwrite 只支持 woclr")
+            if f.get("onread") is not None and f["onread"] not in ONREAD:
+                raise Bad(f"{r['name']}.{f['name']}: onread 只支持 {sorted(ONREAD)}")
+            if f.get("onread") and f.get("volatile"):
+                raise Bad(f"{r['name']}.{f['name']}: volatile 字段没有存储，"
+                          f"读它不可能有副作用")
             hi, lo, w = _bits(f, params)
             if multi:
                 for a, b, nm in span:
@@ -132,6 +141,7 @@ def _rows(spec: dict, params: list[str], dw: int = 32) -> list[dict]:
                 "feat": f.get("feature") or r.get("feature"),
                 "vol": bool(f.get("volatile")),
                 "swacc": bool(f.get("swacc")), "swmod": bool(f.get("swmod")),
+                "onread": f.get("onread"),
             })
         out.append({"name": r["name"], "offset": off, "desc": r.get("desc", ""),
                     "feat": r.get("feature"), "multi": multi, "fields": flds,
@@ -166,9 +176,21 @@ def bsv(pkg: Pkg) -> str:
         if _r["offset"] >= (1 << aw):
             raise Bad(f"{_r['name']} 的 offset {_r['offset']:#x} 放不进 {aw} 位地址")
 
+    def dual(f) -> bool:
+        """软硬两侧都会写这个字段吗。是的话要 CReg 定序：端口 0 给规则、端口 1 给总线。
+
+        原来只认 `hwset + woclr` 一种（中断状态）。`rtc` 的计数器逼出了第二种：
+        硬件每拍加一、软件又能设时间，两边都写。不定序的话两条路互相要求排在
+        对方之前，bsc 判定规则永不触发——而那只是一句告警，仿真里表现为时间不走。
+        """
+        if f["vol"]:
+            return False
+        return (f["hwset"] and f["woclr"]) or (
+            f["hw"] in ("w", "rw") and f["sw"] in ("w", "rw"))
+
     def port(reg, f, p):
         s = _sig(reg, f) + "_r"
-        return f"{s}[{p}]" if (f["hwset"] and f["woclr"]) else s
+        return f"{s}[{p}]" if dual(f) else s
 
     L: list[str] = [f"package {C}Regs;", "",
                     "// 由 regmap.yaml 生成，勿手改。改 regmap.yaml 后重新生成。", "",
@@ -185,8 +207,27 @@ def bsv(pkg: Pkg) -> str:
             s = _sig(reg, f)
             if reg["arr"]:
                 n = reg["arr"]["count"]
-                if f["hw"] in ("r", "rw"):
+                if f["vol"] and f["hw"] in ("w", "rw"):
+                    # 没有存储的数组：硬件每拍把整条向量驱动上去
+                    L.append(f"  (* always_ready *) method Action {s}_in("
+                             f"Vector#({n}, Bit#({f['w']})) v);")
+                if f["swacc"]:
+                    L += [f"  (* always_ready *) method Bool {s}_rd;"
+                          f"   // 软件读过一次",
+                          f"  (* always_ready *) method "
+                          f"Bit#(TLog#(TAdd#({n}, 1))) {s}_rd_i;   // 读的是哪一个"]
+                if f["swmod"]:
+                    L += [f"  (* always_ready *) method Bool {s}_wr;"
+                          f"   // 软件写过一次",
+                          f"  (* always_ready *) method "
+                          f"Bit#(TLog#(TAdd#({n}, 1))) {s}_wr_i;   // 写的是哪一个"]
+                if f["hw"] in ("r", "rw") and not f["vol"]:
                     L.append(f"  (* always_ready *) method Vector#({n}, Bit#({f['w']})) {s};")
+                if f["hw"] in ("w", "rw") and not f["vol"]:
+                    # 数组的硬件写要带下标。timer 的捕获寄存器逼出了这一处：
+                    # 「数组 + 硬件写」两个键各自合法，组合却一直没实现。
+                    L.append(f"  (* always_ready *) method Action {s}_in("
+                             f"Bit#(TLog#(TAdd#({n}, 1))) i, Bit#({f['w']}) v);")
                 continue
             if f["hw"] in ("r", "rw") and not f["vol"]:
                 L.append(f"  (* always_ready *) method Bit#({f['w']}) {s};")
@@ -211,6 +252,16 @@ def bsv(pkg: Pkg) -> str:
         prov.append(f"Add#(_w{i}, {w}, dw)")
     if any(r["rw"] > dw_i for r in rs):
         prov.append(f"Add#(_h, {dw_i}, dw)")
+    # 数组的读写脉冲要把偏移截成下标，得声明下标放得下
+    seen_idx = set()
+    for r in rs:
+        for fl in r["fields"]:
+            if r["arr"] and (fl["swacc"] or fl["swmod"]):
+                n = r["arr"]["count"]
+                if n not in seen_idx:
+                    prov.append(f"Add#(_i{len(seen_idx)}, "
+                                f"TLog#(TAdd#({n}, 1)), {aw})")
+                    seen_idx.add(n)
     L += ["    provisos (" + ", ".join(prov) + ");", ""]
 
     for reg in rs:
@@ -225,6 +276,11 @@ def bsv(pkg: Pkg) -> str:
                 if f["vol"]:
                     L.append(f"  Vector#({n}, Wire#(Bit#({f['w']}))) {s} <- "
                              f"replicateM(mkDWire(0));")
+                elif dual(f):
+                    # 数组一样要定序。少了这一步，规则与总线方法同写一个元素，
+                    # bsc 判定规则永不触发——mbox 的门铃就是这么不响的。
+                    L.append(f"  Vector#({n}, Array#(Reg#(Bit#({f['w']})))) {s} <- "
+                             f"replicateM(mkCReg(2, {init}));")
                 else:
                     L.append(f"  Vector#({n}, Reg#(Bit#({f['w']}))) {s} <- "
                              f"replicateM(mkReg({init}));")
@@ -233,8 +289,8 @@ def bsv(pkg: Pkg) -> str:
                 # 没有存储：硬件每拍驱动，总线只是读它
                 L.append(f"  Wire#(Bit#({f['w']})) {s} <- mkDWire(0);")
                 continue
-            if f["hwset"] and f["woclr"]:
-                # 硬件置位与软件写1清除两处写，须 CReg 定序：端口0给规则、端口1给总线方法
+            if dual(f):
+                # 两处写，须 CReg 定序：端口0给规则、端口1给总线方法
                 L.append(f"  Reg#(Bit#({f['w']})) {s}[2] <- mkCReg(2, {init});")
             else:
                 L.append(f"  Reg#(Bit#({f['w']})) {s} <- mkReg({init});")
@@ -247,8 +303,14 @@ def bsv(pkg: Pkg) -> str:
             s = _sig(reg, f)
             if f["swacc"]:
                 L.append(f"  PulseWire {s}_acc <- mkPulseWire;")
+                if reg["arr"]:
+                    L.append(f"  Wire#(Bit#(TLog#(TAdd#({reg['arr']['count']}, 1))))"
+                             f" {s}_acc_i <- mkDWire(0);")
             if f["swmod"]:
                 L.append(f"  PulseWire {s}_mod <- mkPulseWire;")
+                if reg["arr"]:
+                    L.append(f"  Wire#(Bit#(TLog#(TAdd#({reg['arr']['count']}, 1))))"
+                             f" {s}_mod_i <- mkDWire(0);")
     L.append("")
 
     def _fld_read(reg, f):
@@ -279,19 +341,31 @@ def bsv(pkg: Pkg) -> str:
         span = f"fromInteger(valueOf({cnt}))*{stride}" if isinstance(cnt, str) else f"{cnt*stride}"
         idx = f"((off - {aw}'h{base:0{hexw}X}) / {stride})"
         sub = f"((off - {aw}'h{base:0{hexw}X}) % {stride})" if words > 1 else "0"
-        tgt = f"{_sig(reg, f)}_r[{idx}]" if reg["arr"] else _sig(reg, f) + "_r"
+        # 总线走 CReg 的端口 1，规则走端口 0——软硬双写的字段靠这个定序
+        sfx = "[1]" if (reg["arr"] and dual(f)) else ""
+        tgt = (f"{_sig(reg, f)}_r[{idx}]{sfx}" if reg["arr"]
+               else port(reg, f, 1))
         L += [f"      if (off >= {aw}'h{base:0{hexw}X} && off < {aw}'h{base:0{hexw}X} + {span}) begin",
               "        err = False;"]
         if words == 1:
             if f["vol"]:
                 L += [f"        rd = zeroExtend({tgt});   // 硬件驱动，总线只读"]
+            elif f["onread"]:
+                v = "'1" if f["onread"] == "rset" else "0"
+                L += [f"        rd = zeroExtend({tgt});",
+                      f"        if (r.write) {tgt} <= truncate(wd);",
+                      f"        else {tgt} <= {v};"]
             else:
                 L += [f"        if (r.write) {tgt} <= truncate(wd);",
                       f"        else rd = zeroExtend({tgt});"]
+            ix = f" {_sig(reg, f)}_acc_i <= truncate({idx});" if reg["arr"] else ""
             if f["swacc"]:
-                L += [f"        if (!r.write) {_sig(reg, f)}_acc.send();"]
+                L += [f"        if (!r.write) begin"
+                      f" {_sig(reg, f)}_acc.send();{ix} end"]
+            ix = f" {_sig(reg, f)}_mod_i <= truncate({idx});" if reg["arr"] else ""
             if f["swmod"]:
-                L += [f"        if (r.write) {_sig(reg, f)}_mod.send();"]  # 两侧都已过渡
+                L += [f"        if (r.write) begin"
+                      f" {_sig(reg, f)}_mod.send();{ix} end"]
         else:
             hi = f"{tgt}[{reg['rw']-1}:{dw_i}]"
             lo = f"{tgt}[{dw_i-1}:0]"
@@ -348,6 +422,12 @@ def bsv(pkg: Pkg) -> str:
                         f"else rd = zeroExtend({wr});"]
             elif f["sw"] == "r":
                 body = [f"rd = zeroExtend({wr});"]
+            elif f["onread"]:
+                # 读回旧值，同一拍把字段置位（取锁）或清零（读后清）
+                v = "'1" if f["onread"] == "rset" else "0"
+                body = [f"rd = zeroExtend({wr});",
+                        f"if (r.write) {wr} <= truncate(applyStrb(zeroExtend({wr}), wd, r.wstrb));",
+                        f"else {wr} <= {v};"]
             else:
                 body = [f"if (r.write) {wr} <= truncate(applyStrb(zeroExtend({wr}), wd, r.wstrb));"]
         arm = "\n               ".join(body)
@@ -365,8 +445,33 @@ def bsv(pkg: Pkg) -> str:
         for f in reg["fields"]:
             s = _sig(reg, f)
             if reg["arr"]:
-                if f["hw"] in ("r", "rw"):
-                    L.append(f"  method {s} = readVReg({s}_r);")
+                n = reg["arr"]["count"]
+                el = f"{s}_r[i][0]" if dual(f) else f"{s}_r[i]"
+                if f["vol"] and f["hw"] in ("w", "rw"):
+                    L += [f"  method Action {s}_in(Vector#({n}, Bit#({f['w']})) v);",
+                          f"    for (Integer i = 0; i < valueOf({n}); i = i + 1)",
+                          f"      {s}_r[i] <= v[i];",
+                          "  endmethod"]
+                if f["swacc"]:
+                    L += [f"  method Bool {s}_rd = {s}_acc;",
+                          f"  method {s}_rd_i = {s}_acc_i;"]
+                if f["swmod"]:
+                    L += [f"  method Bool {s}_wr = {s}_mod;",
+                          f"  method {s}_wr_i = {s}_mod_i;"]
+                if f["hw"] in ("r", "rw") and not f["vol"]:
+                    if dual(f):
+                        L += [f"  method Vector#({n}, Bit#({f['w']})) {s};",
+                              f"    Vector#({n}, Bit#({f['w']})) o = newVector;",
+                              f"    for (Integer i = 0; i < valueOf({n}); i = i + 1)",
+                              f"      o[i] = {s}_r[i][0];",
+                              "    return o;", "  endmethod"]
+                    else:
+                        L.append(f"  method {s} = readVReg({s}_r);")
+                if f["hw"] in ("w", "rw") and not f["vol"]:
+                    L += [f"  method Action {s}_in("
+                          f"Bit#(TLog#(TAdd#({n}, 1))) i, Bit#({f['w']}) v);",
+                          f"    {el} <= v;",
+                          "  endmethod"]
                 continue
             if f["hw"] in ("r", "rw") and not f["vol"]:
                 L.append(f"  method Bit#({f['w']}) {s} = {port(reg, f, 0)};")

@@ -336,7 +336,11 @@ def bsv(pkg: Pkg) -> str:
     L += ["  RegIf#(aw, dw) rf = interface RegIf;",
           "    method ActionValue#(RegRsp#(dw)) access(RegReq#(aw, dw) r);",
           "      Bit#(dw) rd = 0;", "      Bool err = True;   // 先假定未命中",
-          f"      Bit#({aw}) off = truncate(r.addr);", "      Bit#(dw) wd = r.wdata;"]
+          f"      Bit#({aw}) off = truncate(r.addr);",
+          # 数组顶到地址空间天花板时 base + span 会在 aw 位里回绕成 0，
+          # 上界判据恒假、整块数组从总线上消失。范围检查一律在更宽的类型里算。
+          f"      Bit#({aw + 8}) offw = zeroExtend(off);",
+          "      Bit#(dw) wd = r.wdata;"]
     # 数组与宽寄存器：份数可能是参数，Python 展不开，只能生成动态索引
     for reg in [x for x in rs if x["arr"] or x["rw"] > dw_i]:
         f = reg["fields"][0]
@@ -345,8 +349,8 @@ def bsv(pkg: Pkg) -> str:
         stride = reg["arr"]["stride"] if reg["arr"] else reg["rw"] // 8
         cnt = reg["arr"]["count"] if reg["arr"] else 1
         span = f"fromInteger(valueOf({cnt}))*{stride}" if isinstance(cnt, str) else f"{cnt*stride}"
-        idx = f"((off - {aw}'h{base:0{hexw}X}) / {stride})"
-        sub = (f"((off - {aw}'h{base:0{hexw}X}) % {stride})"
+        idx = f"((offw - {aw + 8}'h{base:0{hexw}X}) / {stride})"
+        sub = (f"((offw - {aw + 8}'h{base:0{hexw}X}) % {stride})"
                if words > 1 or reg["arr"] else "0")
         # 总线走 CReg 的端口 1，规则走端口 0——软硬双写的字段靠这个定序
         ix = f"[{idx}]" if reg["arr"] else ""
@@ -361,8 +365,9 @@ def bsv(pkg: Pkg) -> str:
         # 于是 rtc 的 alarm、aclint 的 ssip 在特性关掉时照样能读能写——
         # 而一致性测试只走标量寄存器，正好看不见。
         gate = f" && cfg.{reg['feat']}" if reg["feat"] else ""
-        L += [f"      if (off >= {aw}'h{base:0{hexw}X} && "
-              f"off < {aw}'h{base:0{hexw}X} + {span}{inElem}{gate}) begin",
+        wide = aw + 8
+        L += [f"      if (offw >= {wide}'h{base:0{hexw}X} && "
+              f"offw < {wide}'h{base:0{hexw}X} + {span}{inElem}{gate}) begin",
               "        err = False;"]
         if words > 1 and reg["multi"]:
             raise Bad(f"{reg['name']}：比总线宽的寄存器本版只支持单字段")

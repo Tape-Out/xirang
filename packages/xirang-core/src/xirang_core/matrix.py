@@ -23,7 +23,7 @@ import itertools
 from .manifest import Bad, Pkg
 
 MODES = ("auto", "full", "none")
-TEST_KEYS = {"matrix", "extra", "skip"}
+TEST_KEYS = {"matrix", "extra", "skip", "unused"}
 FULL_CAP = 64
 
 
@@ -121,6 +121,8 @@ def check(pkg: Pkg):
         raise Bad(f"{pkg.path}: test 段有不认识的键 {sorted(unknown)}")
     if t.get("matrix", "auto") not in MODES:
         raise Bad(f"{pkg.path}: test.matrix 只能是 {list(MODES)}")
+    if not isinstance(t.get("unused", []), list):
+        raise Bad(f"{pkg.path}: test.unused 应是列表")
     knobs = pkg.knobs()
     for key in ("extra", "skip"):
         for pt in t.get(key) or []:

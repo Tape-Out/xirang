@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import re
 import json
 import pathlib
 import shutil
@@ -490,6 +491,41 @@ def _digest(d: pathlib.Path) -> str:
     return h.hexdigest()[:16]
 
 
+def _unused_methods(pkg: Pkg, gen_dir: pathlib.Path) -> list[str]:
+    """寄存器接口暴露的方法，实现里得真的用到。
+
+    只在清单里、实现里没人读的字段是最贵的错：不报错、不告警，面板还会
+    认真地把它标价为零。`emac` 的 `ctrl.loop` 就这么躺着——寄存器写得进去，
+    环回一次也没发生过。
+
+    确实用不到的，写进 ip.yaml 的 test.unused 并说明理由。那份名单反过来
+    也要成立：名单里的方法一旦被用上了，或者压根不存在，同样报错。
+    """
+    src = "".join(
+        f.read_text(encoding="utf-8", errors="ignore")
+        for f in sorted((pkg.root / "bsv").glob("*.bsv"))
+        + sorted((pkg.root / "bsv").glob("*.bs")))
+    out: list[str] = []
+    names: list[str] = []
+    for g in sorted(gen_dir.glob("*Regs.bsv")):
+        ifc = g.read_text(encoding="utf-8").split("endinterface")[0]
+        for n in re.findall(r"method\s+\S+\s+(\w+)\s*[;(]", ifc):
+            if n != "regs" and n not in names:
+                names.append(n)
+    declared = list((pkg.ip.get("test") or {}).get("unused") or [])
+    bogus = [n for n in declared if n not in names]
+    if bogus:
+        out.append(f"test.unused 提到寄存器接口里没有的方法 {sorted(bogus)}")
+    dead = [n for n in names if f".{n}" not in src]
+    stale = [n for n in declared if n in names and n not in dead]
+    if stale:
+        out.append(f"test.unused 里这几个其实已经用上了，删掉 {sorted(stale)}")
+    left = [n for n in dead if n not in declared]
+    if left:
+        out.append(f"寄存器图声明了、实现里没人用：{sorted(left)}"
+                   f"——要么实现，要么写进 ip.yaml 的 test.unused 并说明为什么")
+    return out
+
 def cmd_test(args) -> int:
     """把一个 IP 在整张矩阵上验一遍：调度门禁、寄存器一致性、各仓自己的行为测试。"""
     index = _index(_search(args))
@@ -514,6 +550,13 @@ def cmd_test(args) -> int:
     work.mkdir(parents=True, exist_ok=True)
     has_bsv = (pkg.root / "bsv").is_dir()
     cap = pkg.name[:1].upper() + pkg.name[1:]
+
+    if pkg.regmap:
+        problems = _unused_methods(pkg, out / "bsv")
+        for q in problems:
+            print(f"  {BOLD}✘{OFF} {q}")
+        if problems:
+            return 1
 
     pts = points(pkg)
     if args.point:

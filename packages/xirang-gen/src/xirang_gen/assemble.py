@@ -2,81 +2,95 @@
 
 判据是装配包里**零自有 RTL**——生成器只要还需要一句手写胶水，就说明 schema
 缺字段，该补的是字段，不是把胶水塞进仓里。
+
+译码用 `hwcore` 的 `mkFabric`（编译期完全展开），总线绑定用 `amba` 的
+`mkApb4Bind`，**整颗 SoC 只有一个绑定器**，而不是每个 IP 各带一个。
 """
 from __future__ import annotations
 
 from xirang_core.manifest import Bad, Pkg
 from xirang_core.model import Resolved
-
-
-def _bsv_bool(v) -> str:
-    return "True" if v else "False"
+from xirang_gen.wrap import BUSES, sub_targs
 
 
 def _lit(v) -> str:
     if isinstance(v, bool):
-        return _bsv_bool(v)
+        return "True" if v else "False"
     if isinstance(v, int):
         return str(v)
     return f'"{v}"'
 
 
-
-
 def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
+    if res.bus not in BUSES:
+        raise Bad(f"本版装配只支持 {sorted(BUSES)}，收到 {res.bus}")
+    bus = BUSES[res.bus]
     root = pkgs[res.top]
-    if res.bus != "apb4":
-        raise Bad(f"本版只生成 apb4 装配，收到 {res.bus}")
+    ctrl = (root.ip.get("contract") or {}).get("ctrl") or {}
+    aw, dw = ctrl.get("aw", 32), ctrl.get("dw", 32)
+    hexw = (aw + 3) // 4
 
-    imports, decls, wires, pins_if, pins_impl = [], [], [], [], []
-    seen_pkgs = set()
+    imports, decls, devs, pins_if, pins_impl, irq_if, irq_impl = [], [], [], [], [], [], []
+    seen = set()
 
-    for inst in res.instances:
+    for k, inst in enumerate(res.instances):
         p = pkgs[inst.of]
         e = p.bsv_emit()
-        if e["package"] not in seen_pkgs:
+        if e["package"] not in seen:
             imports.append(f"import {e['package']}::*;")
-            seen_pkgs.add(e["package"])
+            seen.add(e["package"])
         knobs = p.knobs()
-        args = ", ".join(f"{k}: {_lit(inst.values[k].value)}"
-                         for k in knobs if knobs[k]["kind"] == "feature")
-        # 数值旋钮走类型参数
-        nums = [str(inst.values[k].value) for k in knobs if knobs[k]["kind"] == "param"]
-        targs = ", ".join(["8", "32"] + nums)
-        decls.append(f"  {e['interface']}#({targs}) {inst.name} <- "
-                     f"{e['module']}({e['config_type']} {{ {args} }});")
+        args = ", ".join(f"{n}: {_lit(inst.values[n].value)}"
+                         for n in knobs if knobs[n]["kind"] == "feature")
+        nums = [str(inst.values[n].value) for n in knobs if knobs[n]["kind"] == "param"]
+        # IP 按它自己声明的位宽例化——价目表就是照这个宽度量的。
+        # 撑到片上的 32 位会多出一截地址比较，账就对不上了。
+        ic = (p.ip.get("contract") or {}).get("ctrl") or {}
+        iaw, idw = ic.get("aw", 8), ic.get("dw", 32)
+        if idw != dw:
+            raise Bad(f"{inst.name} 的数据宽 {idw} 与片上 {dw} 不一致，本版不做宽度转换")
+        if iaw > aw:
+            raise Bad(f"{inst.name} 的地址宽 {iaw} 比片上 {aw} 还宽")
+        decls.append(f"  {e['interface']}#({', '.join([str(iaw), str(idw)] + nums)}) "
+                     f"{inst.name} <- {e['module']}({e['config_type']} {{ {args} }});")
 
         if inst.addr is None:
             raise Bad(f"{inst.name} 没有地址，且它的包没有 regmap.yaml 的 base")
-        hi = inst.addr >> 8
-        wires.append((inst.name, hi))
-        pins_if.append(f"  interface GpioPins#({nums[0] if nums else '32'}) {inst.name}_pins;")
-        pins_impl.append(f"  interface {inst.name}_pins = {inst.name}.pins;")
+        span = inst.size or (1 << iaw)
+        ip_irqs = [i["name"] for i in (p.ip.get("contract") or {}).get("irq", []) or []]
+        # Device 只带一根中断线；多中断的 IP 逐根落进向量由 instances 展开时决定
+        one = (f"tagged Valid {inst.name}.{ip_irqs[0]}" if ip_irqs else "tagged Invalid")
+        devs.append(f"  devs[{k}] = device({aw}'h{inst.addr:0{hexw}X}, "
+                    f"{aw}'h{span:0{hexw}X}, "
+                    f"narrow({inst.name}.{e.get('ctrl', 'regs')}), {one});")
 
-    sel = "\n".join(
-        f"    Bool sel_{n} = psel && (paddr[31:8] == 24'h{h:06X});" for n, h in wires)
-    fan = "\n".join(
-        f"    {n}.apb.req(truncate(paddr), pprot, sel_{n}, penable, pwrite, pwdata, pstrb);"
-        for n, _ in wires)
-    rd = " |\n            ".join(
-        f"(sel_r_{n} ? {n}.apb.prdata : 0)" for n, _ in wires)
-    er = " || ".join(f"(sel_r_{n} && {n}.apb.pslverr)" for n, _ in wires)
-    rdy = " && ".join(f"(!sel_r_{n} || {n}.apb.pready)" for n, _ in wires)
-    selr = "\n".join(
-        f"  Reg#(Bool) sel_r_{n} <- mkReg(False);" for n, _ in wires)
-    selr_set = "\n".join(f"    sel_r_{n} <= sel_{n};" for n, _ in wires)
+        for s in e.get("pins") or []:
+            nm = f"{inst.name}_{s['name']}"
+            pins_if.append(f"  interface {s['type']}"
+                           f"{sub_targs(s, inst.values, p.name)} {nm};")
+            pins_impl.append(f"  interface {nm} = {inst.name}.{s['name']};")
+
+    n = len(res.instances)
+    if not n:
+        raise Bad(f"{res.top} 的 instances 是空的")
+    irq_if.append(f"  (* always_ready, result = \"irqs\" *) method Bit#({n}) irqs;")
+    irq_impl.append("  method Bit#(%d) irqs = pack(irqsOf(devs));" % n)
 
     L = [
         f"package {top_module}Pkg;",
         "",
         "// 由 ip.yaml 的 instances 段生成，勿手改。这个包里没有一行自有 RTL。",
         "",
-        "import Apb4::*;",
+        "import Vector::*;",
+        "import RegIf::*;",
+        "import Fabric::*;",
+        f"import {bus['pkg']}::*;",
         *imports,
         "",
         f"interface {top_module}Ifc;",
-        "  interface Apb4SlavePins#(32, 32) apb;",
+        f"  interface {bus['pins']}#({aw}, {dw}) bus;",
         *pins_if,
+        *irq_if,
         "endinterface",
         "",
         "(* synthesize *)",
@@ -85,20 +99,15 @@ def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
         "",
         *decls,
         "",
-        "  // 译码结果打一拍，供响应回选。APB4 的响应在 ACCESS 拍之后。",
-        selr,
+        f"  Vector#({n}, Device#({aw}, {dw})) devs = newVector;",
+        *devs,
         "",
-        "  interface Apb4SlavePins apb;",
-        "    method Action req(paddr, pprot, psel, penable, pwrite, pwdata, pstrb);",
-        sel,
-        selr_set,
-        fan,
-        "    endmethod",
-        f"    method Bit#(32) prdata  = {rd};",
-        f"    method Bool     pslverr = {er};",
-        f"    method Bool     pready  = {rdy};",
-        "  endinterface",
+        f"  RegIf#({aw}, {dw}) fab <- mkFabric(devs);",
+        f"  {bus['pins']}#({aw}, {dw}) sl <- {bus['bind']}(fab);",
+        "",
+        "  interface bus = sl;",
         *pins_impl,
+        *irq_impl,
         "endmodule",
         "",
         "endpackage",

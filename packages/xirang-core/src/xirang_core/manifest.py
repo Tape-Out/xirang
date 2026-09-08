@@ -80,12 +80,19 @@ class Pkg:
         if self.kind not in ("ip", "library"):
             raise Bad(f"{self.path}: kind={self.kind} 只能是 ip 或 library")
         if self.is_library:
-            # 库包不被例化，所以这些字段没有意义，写了反而误导
-            for k in ("contract", "params", "features", "area", "instances"):
+            # 库包不进地址图，所以这些字段没有意义，写了反而误导
+            for k in ("contract", "params", "features", "instances"):
                 if k in ip:
-                    raise Bad(f"{self.path}: 库包不该有 {k}——它不会被例化")
+                    raise Bad(f"{self.path}: 库包不该有 {k}——它不进地址图")
             if self.regmap:
                 raise Bad(f"{self.path}: 库包不该有 regmap.yaml")
+            # 但库里的模块确实会被例化（总线绑定器每个总线端口一个），
+            # 那笔面积就该记在实现它的包上。库没有旋钮，所以只能是定值。
+            a = ip.get("area") or {}
+            if a and set(a.get("base") or {}) - {"fixed"}:
+                raise Bad(f"{self.path}: 库包的 area 只能是定值——它没有旋钮可依")
+            if set(a) - {"base", "model", "error", "corner", "assembly"}:
+                raise Bad(f"{self.path}: 库包的 area 有不认识的键")
             return
         feats = ip.get("features", {}) or {}
         params = ip.get("params", {}) or {}
@@ -126,6 +133,15 @@ class Pkg:
                 if missing:
                     raise Bad(f"{self.path}: emit 的 bsv 段缺 {missing}——"
                               f"装配器要靠它生成 import 与例化")
+                extra = set(e) - {"kind", "package", "module", "config_type",
+                                  "interface", "ctrl", "pins"}
+                if extra:
+                    raise Bad(f"{self.path}: emit 的 bsv 段有不认识的键 "
+                              f"{sorted(extra)}——写错的键会被默默忽略")
+                for s in e.get("pins") or []:
+                    miss = [k for k in ("name", "type") if k not in s]
+                    if miss:
+                        raise Bad(f"{self.path}: emit.pins 的某一项缺 {miss}")
                 return e
         raise Bad(f"{self.path}: 没有 kind: bsv 的 emit 段")
 

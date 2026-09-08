@@ -1,8 +1,11 @@
-"""价目表：按「基线 + 每特性(固定项, 每单位斜率)」累加。
+"""价目表：实测过的配置直接查表，没测过的按「基线 + 每特性」叠加。
 
-不按 2ⁿ 组合存表，因为实测证明可以线性叠加：gpio 三特性八组合 × 两位宽，
-叠加预测的偏差恒在 −0.6% ~ −6.9%，**符号一律为负**——特性之间共享的逻辑被
-优化器合并掉了。所以预测恒为高估，预算工具只会偏保守，不会承诺不了。
+叠加不是白来的。gpio 全网格（6 个合法组合 × 4 个位宽）实测下来，特性之间会
+互相借用逻辑：irq+bidir 在 8 针处比两项相加**多** 9.57%，在 32 针处又少 4.68%，
+符号两边都有。所以叠加的结果要按实测的最差欠估抬一道余量，才谈得上「恒为高估」。
+落在实测网格上的配置不走这条路——直接给实测值，既精确又不必抬。
+
+装配那一层的承诺不同，见 annotate。
 """
 from __future__ import annotations
 
@@ -60,10 +63,26 @@ def _term(spec: dict, vals) -> float:
     return a
 
 
-def price(pkg: Pkg, vals) -> tuple[float, dict[str, float]]:
-    """返回 (总面积, 每个旋钮各摊多少)。后者是面板第五问的答案。"""
+def measured(pkg: Pkg, vals) -> float | None:
+    """这套旋钮实测过吗。实测过就不必再猜，也不必抬余量。"""
+    for row in (pkg.ip.get("area") or {}).get("measured", []) or []:
+        at = row.get("at") or {}
+        if all(k in vals and vals[k].value == v for k, v in at.items()):
+            return float(row["um2"])
+    return None
+
+
+def price(pkg: Pkg, vals, lift: bool = True) -> tuple[float, dict[str, float]]:
+    """返回 (总面积, 每个旋钮各摊多少)。后者是面板第五问的答案。
+
+    `lift` 决定要不要抬上界。叶子独立综合时要抬——那是上界承诺；装配里不抬，
+    因为装配另有自己的比例项，两者叠在一起会保守到没法用来比较配置。
+    """
     area = pkg.ip.get("area") or {}
     per_knob: dict[str, float] = {}
+    hit = measured(pkg, vals)
+    if hit is not None:
+        return hit, per_knob
     total = _term(area.get("base"), vals)
 
     for fn, f in (pkg.ip.get("features") or {}).items():
@@ -80,7 +99,7 @@ def price(pkg: Pkg, vals) -> tuple[float, dict[str, float]]:
         total += cost
 
     m = float((pkg.ip.get("area") or {}).get("margin", 0.0))
-    if m:
+    if lift and m:
         total *= (1.0 + m)
     return total, per_knob
 
@@ -90,7 +109,7 @@ def annotate(res: Resolved, pkgs: dict[str, Pkg]) -> Resolved:
     def rec(insts: list[Instance]) -> float:
         s = 0.0
         for i in insts:
-            own, per_knob = price(pkgs[i.of], i.values)
+            own, per_knob = price(pkgs[i.of], i.values, lift=False)
             for k, c in per_knob.items():
                 i.values[k].area_um2 = c
             i.area_um2 = own + rec(i.children)
@@ -99,7 +118,19 @@ def annotate(res: Resolved, pkgs: dict[str, Pkg]) -> Resolved:
 
     root = pkgs.get(res.top)
     own = price(root, {})[0] if root and (root.ip.get("area") or {}).get("base") else 0.0
-    res.area_um2 = own + rec(res.instances)
+    # 库里的模块整颗芯片只例化一次（总线绑定器、交换网），所以按包记一次。
+    own += sum(price(p, {})[0] for n, p in pkgs.items()
+               if n != res.top and p.is_library
+               and (p.ip.get("area") or {}).get("base"))
+    # 装配不是各实例之和：综合会跨边界优化，独立综合时保住的端口在装配里被并掉，
+    # 而嵌套的握手又比独立边界贵。实测这个系数在 0.94 到 1.29 之间，取中并给双侧误差。
+    # 叶子的价目表仍是上界，装配这一层只是估计——两件事的承诺不同。
+    fac = 1.0
+    for p in pkgs.values():
+        if p.is_library:
+            fac = max(fac, ((p.ip.get("area") or {}).get("assembly") or {})
+                      .get("factor", 1.0))
+    res.area_um2 = own + rec(res.instances) * fac
     return res
 
 
@@ -112,8 +143,16 @@ def gen_digest(pkg: Pkg) -> str | None:
     if not pkg.regmap:
         return None
     import hashlib
+
+    from xirang_core.resolve import resolve_pkg
     from xirang_gen.regmap import bsv
-    return "sha256:" + hashlib.sha256(bsv(pkg).encode()).hexdigest()[:16]
+    from xirang_gen.wrap import flat_emit, wrap
+    parts = [bsv(pkg)]
+    # 包装层也是生成的，也进面积。只取默认配置那一份即可——
+    # 生成器一变，这一份就跟着变。
+    if flat_emit(pkg) is not None:
+        parts.append(wrap(pkg, resolve_pkg(pkg, {}, "digest", None, {})))
+    return "sha256:" + hashlib.sha256("".join(parts).encode()).hexdigest()[:16]
 
 
 def stale(pkg: Pkg) -> str | None:

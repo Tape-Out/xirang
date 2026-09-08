@@ -172,14 +172,14 @@ def bsv(pkg: Pkg) -> str:
 
     L: list[str] = [f"package {C}Regs;", "",
                     "// 由 regmap.yaml 生成，勿手改。改 regmap.yaml 后重新生成。", "",
-                    "import Apb4::*;", "import Vector::*;", ""]
+                    "import RegIf::*;", "import Vector::*;", ""]
     if feats:
         L.append("typedef struct {")
         L += [f"  Bool {f};" for f in feats]
         L += [f"}} {C}RegsCfg;", ""]
 
     L.append(f"interface {C}RegsIfc#({tparams});")
-    L.append("  interface Apb4RegFile#(aw, dw) regs;")
+    L.append("  interface RegIf#(aw, dw) regs;")
     for reg in rs:
         for f in reg["fields"]:
             s = _sig(reg, f)
@@ -265,10 +265,10 @@ def bsv(pkg: Pkg) -> str:
         parts = [_fld_read(reg, f) for f in reg["fields"]]
         return " |\n                      ".join(parts)
 
-    L += ["  Apb4RegFile#(aw, dw) rf = interface Apb4RegFile;",
-          "    method ActionValue#(Apb4Rsp#(dw)) access(Apb4Req#(aw, dw) r);",
+    L += ["  RegIf#(aw, dw) rf = interface RegIf;",
+          "    method ActionValue#(RegRsp#(dw)) access(RegReq#(aw, dw) r);",
           "      Bit#(dw) rd = 0;", "      Bool err = True;   // 先假定未命中",
-          f"      Bit#({aw}) off = truncate(r.paddr);", "      Bit#(dw) wd = r.pwdata;"]
+          f"      Bit#({aw}) off = truncate(r.addr);", "      Bit#(dw) wd = r.wdata;"]
     # 数组与宽寄存器：份数可能是参数，Python 展不开，只能生成动态索引
     for reg in [x for x in rs if x["arr"] or x["rw"] > dw_i]:
         f = reg["fields"][0]
@@ -286,19 +286,19 @@ def bsv(pkg: Pkg) -> str:
             if f["vol"]:
                 L += [f"        rd = zeroExtend({tgt});   // 硬件驱动，总线只读"]
             else:
-                L += [f"        if (r.pwrite) {tgt} <= truncate(wd);",
+                L += [f"        if (r.write) {tgt} <= truncate(wd);",
                       f"        else rd = zeroExtend({tgt});"]
             if f["swacc"]:
-                L += [f"        if (!r.pwrite) {_sig(reg, f)}_acc.send();"]
+                L += [f"        if (!r.write) {_sig(reg, f)}_acc.send();"]
             if f["swmod"]:
-                L += [f"        if (r.pwrite) {_sig(reg, f)}_mod.send();"]  # 两侧都已过渡
+                L += [f"        if (r.write) {_sig(reg, f)}_mod.send();"]  # 两侧都已过渡
         else:
             hi = f"{tgt}[{reg['rw']-1}:{dw_i}]"
             lo = f"{tgt}[{dw_i-1}:0]"
             # 寄存器是字面宽度，总线是类型参数，边界上必须过渡
             wdn = f"Bit#({dw_i})' (truncate(wd))"
             L += [f"        Bool isHi = ({sub} >= {dw_i//8});",
-                  "        if (r.pwrite) begin",
+                  "        if (r.write) begin",
                   f"          if (isHi) {tgt} <= {{{wdn}, {lo}}};",
                   f"          else      {tgt} <= {{{hi}, {wdn}}};",
                   "        end else begin"]
@@ -319,8 +319,8 @@ def bsv(pkg: Pkg) -> str:
             # 先拼当前值、套完字节选通再切回各字段——逐字段套选通会算错，
             # 因为选通按字节给，字段边界不一定对齐字节。
             body.append(f"Bit#(dw) cur = {read_expr(reg)};")
-            body.append("Bit#(dw) nw = applyStrb(cur, wd, r.pstrb);")
-            body.append("if (r.pwrite) begin")
+            body.append("Bit#(dw) nw = applyStrb(cur, wd, r.wstrb);")
+            body.append("if (r.write) begin")
             for f in reg["fields"]:
                 if f["sw"] in ("rw", "w") and not f["vol"]:
                     tgt = port(reg, f, 1)
@@ -341,15 +341,15 @@ def bsv(pkg: Pkg) -> str:
             f = reg["fields"][0]
             wr = port(reg, f, 1)
             if f["woclr"]:
-                body = [f"if (r.pwrite) {wr} <= {wr} & ~truncate(wd);",
+                body = [f"if (r.write) {wr} <= {wr} & ~truncate(wd);",
                         f"else rd = zeroExtend({wr});"]
             elif f["sw"] == "rw":
-                body = [f"if (r.pwrite) {wr} <= truncate(applyStrb(zeroExtend({wr}), wd, r.pstrb));",
+                body = [f"if (r.write) {wr} <= truncate(applyStrb(zeroExtend({wr}), wd, r.wstrb));",
                         f"else rd = zeroExtend({wr});"]
             elif f["sw"] == "r":
                 body = [f"rd = zeroExtend({wr});"]
             else:
-                body = [f"if (r.pwrite) {wr} <= truncate(applyStrb(zeroExtend({wr}), wd, r.pstrb));"]
+                body = [f"if (r.write) {wr} <= truncate(applyStrb(zeroExtend({wr}), wd, r.wstrb));"]
         arm = "\n               ".join(body)
         if reg["feat"]:
             L += [f"        {aw}'h{reg['offset']:0{hexw}X}: if (cfg.{reg['feat']}) begin",
@@ -358,7 +358,7 @@ def bsv(pkg: Pkg) -> str:
         else:
             L.append(f"        {aw}'h{reg['offset']:0{hexw}X}: begin err = False; {arm} end")
     L += ["        default: noAction;", "      endcase",
-          "      return Apb4Rsp { prdata: rd, pslverr: err };",
+          "      return RegRsp { rdata: rd, err: err };",
           "    endmethod", "  endinterface;", "", "  interface regs = rf;"]
 
     for reg in rs:

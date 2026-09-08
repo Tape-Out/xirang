@@ -37,15 +37,17 @@ def _run(cmd, cwd=None, env=None):
     return subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True)
 
 
-def bsv_to_verilog(out: pathlib.Path, top: str, src_dirs: list[str]) -> pathlib.Path | None:
+def bsv_to_verilog(out: pathlib.Path, top: str, src_dirs: list[str],
+                   top_src: pathlib.Path | None = None) -> pathlib.Path | None:
     """把 out/bsv 连同额外源目录一起编成 Verilog。"""
     rtl = out / "rtl"
     build = out / ".bsc"
     rtl.mkdir(parents=True, exist_ok=True)
     build.mkdir(parents=True, exist_ok=True)
     path = ":".join([str(out / "bsv"), *src_dirs]) + ":+"
-    srcs = sorted((out / "bsv").glob("*.bsv"))
-    top_src = next((s for s in srcs if s.stem.endswith("Pkg")), None)
+    if top_src is None:
+        srcs = sorted((out / "bsv").glob("*.bsv"))
+        top_src = next((s for s in srcs if s.stem.endswith("Pkg")), None)
     if top_src is None:
         return None
     r = _run(["bsc", "-verilog", "-u", "-vdir", str(rtl), "-bdir", str(build),
@@ -79,8 +81,9 @@ def _pull_bsc_libs(rtl: pathlib.Path):
 
 
 def synth(out: pathlib.Path, top: str, name: str,
-          extra_src: list[str] | None = None) -> float | None:
-    rtl = bsv_to_verilog(out, top, extra_src or [])
+          extra_src: list[str] | None = None,
+          top_src: pathlib.Path | None = None) -> float | None:
+    rtl = bsv_to_verilog(out, top, extra_src or [], top_src)
     if rtl is None:
         return None
     _pull_bsc_libs(rtl)

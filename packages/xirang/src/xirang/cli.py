@@ -11,7 +11,7 @@ import sys
 
 import yaml
 
-from xirang_area.price import annotate, model_note, stale
+from xirang_area.price import annotate, model_note, price, stale
 from xirang_back.ecc import synth
 from xirang_back.export import to_core, to_kconfig, to_tar
 from xirang_core.lock import (check_submodules, make_lock, resolve_deps,
@@ -21,7 +21,7 @@ from xirang_core.model import LAYERS, Resolved
 from xirang_core.resolve import resolve, resolve_pkg
 from xirang_gen.assemble import addr_map, assemble
 from xirang_gen.regmap import generate as gen_regmap
-from xirang_gen.wrap import flat_emit, wrap
+from xirang_gen.wrap import BUSES, flat_emit, neutral, wrap
 
 BOLD, DIM, OFF = "\033[1m", "\033[2m", "\033[0m"
 
@@ -270,8 +270,61 @@ def cmd_export(args) -> int:
 
 # ---------------------------------------------------------------- build
 
+def _bus_price(pkg, index) -> float:
+    """总线绑定器的面积记在实现它的包上（apb4 -> amba），装配只付一次。"""
+    e = flat_emit(pkg)
+    if e is None:
+        return 0.0
+    m = index.get(BUSES[e["bus"]]["manifest"])
+    return price(m, {})[0] if m and (m.ip.get("area") or {}).get("base") else 0.0
+
+
+def _build_leaf(args, pkg) -> int:
+    """叶子 IP 的 build：扁平顶层就是它独立流片的样子，综合的也是这一层。"""
+    cli = {}
+    for kv in args.set or []:
+        k, _, v = kv.partition("=")
+        cli[k] = yaml.safe_load(v)
+    vals = resolve_pkg(pkg, {}, f"{pkg.path} (default)", None, cli)
+    out = pathlib.Path(args.out or "build").resolve()
+    (out / "bsv").mkdir(parents=True, exist_ok=True)
+    (out / "sw").mkdir(parents=True, exist_ok=True)
+    cap = pkg.name[:1].upper() + pkg.name[1:]
+    bare = getattr(args, "neutral", False)
+    src_f = out / "bsv" / (f"{cap}Bare.bsv" if bare else f"{cap}Wrap.bsv")
+    src_f.write_text((neutral if bare else wrap)(pkg, vals), encoding="utf-8")
+    if pkg.regmap:
+        gen_regmap(pkg, out / "bsv", out / "sw")
+    nums = [str(vals[k].value) for k, d in pkg.knobs().items() if d["kind"] == "param"]
+    kind = "Bare" if bare else "Wrap"
+    top_mod = f"mk{cap}{kind}_{'_'.join(nums) if nums else '0'}"
+    want, _ = price(pkg, vals)
+    if not bare:
+        # 扁平顶层比 IP 本体多一个总线绑定器，那笔钱记在实现它的包上
+        want += _bus_price(pkg, _index(_search(args)))
+    print(f"生成于 {out}")
+    print(f"  顶层 {top_mod}   预测面积 {want:,.2f} µm²")
+    if args.no_synth:
+        print("  (--no-synth，跳过综合)")
+        return 0
+    idx = _index(_search(args))
+    src = [str(p.root / "bsv") for p in idx.values() if (p.root / "bsv").exists()]
+    got = synth(out, top_mod, pkg.name, extra_src=src + (args.bsv_path or []),
+                top_src=src_f)
+    if got is None:
+        print("  综合未跑通", file=sys.stderr)
+        return 1
+    err = (got - want) / got * 100 if got else 0
+    print(f"  实测面积 {got:,.2f} µm²   预测偏差 {err:+.2f}%")
+    return 0
+
+
 def cmd_build(args) -> int:
     search = _search(args)
+    if not args.config:
+        idx = _index(search)
+        if args.top in idx and not idx[args.top].is_assembly:
+            return _build_leaf(args, idx[args.top])
     if args.config:
         doc = yaml.safe_load(pathlib.Path(args.config).read_text(encoding="utf-8"))
         if doc.get("xirang") != 1:
@@ -403,6 +456,8 @@ def main(argv=None) -> int:
     b.add_argument("--config", help="从导出的配置构建，用于 round-trip 判据")
     b.add_argument("--no-synth", action="store_true")
     b.add_argument("--bsv-path", action="append", help="额外的 BSV 源目录")
+    b.add_argument("--neutral", action="store_true",
+                   help="综合中立顶层（不含总线绑定器）——价目表量的就是这一层")
     b.add_argument("--locked", action="store_true",
                    help="要求锁文件与当前源码一致，不一致即失败")
     b.set_defaults(fn=cmd_build)

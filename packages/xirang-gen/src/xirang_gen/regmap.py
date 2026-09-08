@@ -350,6 +350,9 @@ def bsv(pkg: Pkg) -> str:
         cnt = reg["arr"]["count"] if reg["arr"] else 1
         span = f"fromInteger(valueOf({cnt}))*{stride}" if isinstance(cnt, str) else f"{cnt*stride}"
         idx = f"((offw - {aw + 8}'h{base:0{hexw}X}) / {stride})"
+        # 脉冲下标仍从窄偏移算。进到这个分支时 off >= base 已经成立，
+        # 减法不会借位；用宽的那个会把加宽泄漏进手写 IP 的 proviso 里。
+        nidx = f"((off - {aw}'h{base:0{hexw}X}) / {stride})"
         sub = (f"((offw - {aw + 8}'h{base:0{hexw}X}) % {stride})"
                if words > 1 or reg["arr"] else "0")
         # 总线走 CReg 的端口 1，规则走端口 0——软硬双写的字段靠这个定序
@@ -386,12 +389,12 @@ def bsv(pkg: Pkg) -> str:
                         L.append(f"          {asn}")
                 if g["swmod"]:
                     L.append(f"          {_sig(reg, g)}_mod.send();")
-                    L.append(f"          {_sig(reg, g)}_mod_i <= truncate({idx});")
+                    L.append(f"          {_sig(reg, g)}_mod_i <= truncate({nidx});")
             L += ["        end else begin", "          rd = cur;"]
             for g in reg["fields"]:
                 if g["swacc"]:
                     L.append(f"          {_sig(reg, g)}_acc.send();")
-                    L.append(f"          {_sig(reg, g)}_acc_i <= truncate({idx});")
+                    L.append(f"          {_sig(reg, g)}_acc_i <= truncate({nidx});")
             L += ["        end"]
         elif words == 1:
             if f["vol"]:
@@ -406,11 +409,11 @@ def bsv(pkg: Pkg) -> str:
             else:
                 L += [f"        if (r.write) {tgt} <= truncate(wd);",
                       f"        else rd = zeroExtend({tgt});"]
-            ix = f" {_sig(reg, f)}_acc_i <= truncate({idx});" if reg["arr"] else ""
+            ix = f" {_sig(reg, f)}_acc_i <= truncate({nidx});" if reg["arr"] else ""
             if f["swacc"]:
                 L += [f"        if (!r.write) begin"
                       f" {_sig(reg, f)}_acc.send();{ix} end"]
-            ix = f" {_sig(reg, f)}_mod_i <= truncate({idx});" if reg["arr"] else ""
+            ix = f" {_sig(reg, f)}_mod_i <= truncate({nidx});" if reg["arr"] else ""
             if f["swmod"]:
                 L += [f"        if (r.write) begin"
                       f" {_sig(reg, f)}_mod.send();{ix} end"]

@@ -60,6 +60,15 @@ class Pkg:
         self._check()
 
     @property
+    def kind(self) -> str:
+        """ip 会被例化、有契约与面积；library 只贡献 BSV 源。"""
+        return self.ip.get("kind", "ip")
+
+    @property
+    def is_library(self) -> bool:
+        return self.kind == "library"
+
+    @property
     def is_assembly(self) -> bool:
         return bool(self.ip.get("instances"))
 
@@ -68,6 +77,16 @@ class Pkg:
         for k in ("name", "version", "spec"):
             if k not in ip:
                 raise Bad(f"{self.path} 缺 {k}")
+        if self.kind not in ("ip", "library"):
+            raise Bad(f"{self.path}: kind={self.kind} 只能是 ip 或 library")
+        if self.is_library:
+            # 库包不被例化，所以这些字段没有意义，写了反而误导
+            for k in ("contract", "params", "features", "area", "instances"):
+                if k in ip:
+                    raise Bad(f"{self.path}: 库包不该有 {k}——它不会被例化")
+            if self.regmap:
+                raise Bad(f"{self.path}: 库包不该有 regmap.yaml")
+            return
         feats = ip.get("features", {}) or {}
         params = ip.get("params", {}) or {}
         for fn, f in feats.items():
@@ -97,6 +116,18 @@ class Pkg:
             for k in ("aw", "dw"):
                 if k in c and k in ic and c[k] != ic[k]:
                     raise Bad(f"regmap 与 ip.yaml 的 contract.{k} 不一致：{c[k]} vs {ic[k]}")
+
+    def bsv_emit(self) -> dict:
+        """kind: bsv 的 emit 段。装配器要靠它知道 BSV 侧叫什么名字。"""
+        for e in self.ip.get("emit", []) or []:
+            if e.get("kind") == "bsv":
+                missing = [k for k in ("package", "module", "config_type", "interface")
+                           if k not in e]
+                if missing:
+                    raise Bad(f"{self.path}: emit 的 bsv 段缺 {missing}——"
+                              f"装配器要靠它生成 import 与例化")
+                return e
+        raise Bad(f"{self.path}: 没有 kind: bsv 的 emit 段")
 
     def knobs(self) -> dict[str, dict]:
         """参数与特性合成一张表，层叠与求解都对着它做。"""

@@ -137,6 +137,9 @@ def resolve(top: str, search: list[pathlib.Path],
         out = []
         for spec in pkg.ip.get("instances", []) or []:
             sub = _find_pkg(spec["of"], search)
+            if sub.is_library:
+                raise Bad(f"{spec['name']} 例化了库包 {spec['of']}——"
+                          f"库包只贡献源码，不会被例化")
             origin = where(pkg.ip, "instances", pkg.path)
             vals = resolve_pkg(sub, spec.get("with", {}), origin, pdk, cli)
             addr = spec.get("addr")

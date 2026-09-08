@@ -21,11 +21,6 @@ def _lit(v) -> str:
     return f'"{v}"'
 
 
-def _emit_of(pkg: Pkg) -> dict:
-    for e in pkg.ip.get("emit", []) or []:
-        if e.get("kind") == "bsv":
-            return e
-    raise Bad(f"{pkg.name} 的 ip.yaml 没有 kind: bsv 的 emit 段")
 
 
 def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
@@ -38,7 +33,7 @@ def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
 
     for inst in res.instances:
         p = pkgs[inst.of]
-        e = _emit_of(p)
+        e = p.bsv_emit()
         if e["package"] not in seen_pkgs:
             imports.append(f"import {e['package']}::*;")
             seen_pkgs.add(e["package"])

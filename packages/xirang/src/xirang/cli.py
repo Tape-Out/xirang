@@ -157,7 +157,7 @@ def cmd_lint(args) -> int:
         # 装配是交付物，必须钉死解析结果；叶子 IP 是被别人依赖的库，
         # 钉死反而会跟使用者的解析冲突（cargo 对库与二进制的区分同理）
         problems.append("装配没有 xirang.lock——跑一次 xirang lock 把解析结果钉住")
-    elif top.deps:
+    elif top.ip.get("deps"):
         notes.append("叶子 IP 不带锁，由使用它的装配去钉")
     if not problems:
         print("干净" + ("；" + "，".join(notes) if notes else ""))

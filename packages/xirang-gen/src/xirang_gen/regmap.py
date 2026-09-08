@@ -358,8 +358,12 @@ def bsv(pkg: Pkg) -> str:
         elemBytes = (reg["rw"] // 8) if reg["arr"] else stride
         inElem = (f" && {sub} < {elemBytes}"
                   if reg["arr"] and stride > elemBytes else "")
+        # 特性关掉的数组要跟标量一样整个消失。这条路径原来根本没查 feature，
+        # 于是 rtc 的 alarm、aclint 的 ssip 在特性关掉时照样能读能写——
+        # 而一致性测试只走标量寄存器，正好看不见。
+        gate = f" && cfg.{reg['feat']}" if reg["feat"] else ""
         L += [f"      if (off >= {aw}'h{base:0{hexw}X} && "
-              f"off < {aw}'h{base:0{hexw}X} + {span}{inElem}) begin",
+              f"off < {aw}'h{base:0{hexw}X} + {span}{inElem}{gate}) begin",
               "        err = False;"]
         if words == 1:
             if f["vol"]:

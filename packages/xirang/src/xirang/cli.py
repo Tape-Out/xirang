@@ -147,13 +147,20 @@ def cmd_lint(args) -> int:
     resolved = resolve_deps(top, index)
     problems = check_submodules(search[0], resolved)
     lockf = search[0] / "xirang.lock"
-    if lockf.exists():
-        problems += verify_lock(yaml.safe_load(lockf.read_text(encoding="utf-8")),
-                                resolved)
-    else:
-        problems.append("没有 xirang.lock——跑一次 xirang lock 把解析结果钉住")
+    notes = []
+    lock = yaml.safe_load(lockf.read_text(encoding="utf-8")) if lockf.exists() else None
+    if lock and lock.get("top") == top.name:
+        problems += verify_lock(lock, resolved)
+    elif lock:
+        notes.append(f"工作区的锁钉的是 {lock.get('top')}，这次不查")
+    elif top.is_assembly:
+        # 装配是交付物，必须钉死解析结果；叶子 IP 是被别人依赖的库，
+        # 钉死反而会跟使用者的解析冲突（cargo 对库与二进制的区分同理）
+        problems.append("装配没有 xirang.lock——跑一次 xirang lock 把解析结果钉住")
+    elif top.deps:
+        notes.append("叶子 IP 不带锁，由使用它的装配去钉")
     if not problems:
-        print("干净")
+        print("干净" + ("；" + "，".join(notes) if notes else ""))
         return 0
     for p in problems:
         print(f"  {p}")

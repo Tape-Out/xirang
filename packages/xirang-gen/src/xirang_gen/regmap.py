@@ -188,8 +188,8 @@ def bsv(pkg: Pkg) -> str:
         return (f["hwset"] and f["woclr"]) or (
             f["hw"] in ("w", "rw") and f["sw"] in ("w", "rw"))
 
-    def port(reg, f, p):
-        s = _sig(reg, f) + "_r"
+    def port(reg, f, p, ix=""):
+        s = _sig(reg, f) + "_r" + ix
         return f"{s}[{p}]" if dual(f) else s
 
     L: list[str] = [f"package {C}Regs;", "",
@@ -313,24 +313,24 @@ def bsv(pkg: Pkg) -> str:
                              f" {s}_mod_i <- mkDWire(0);")
     L.append("")
 
-    def _fld_read(reg, f):
+    def _fld_read(reg, f, ix=""):
         # 只写字段读回零。存是要存的（硬件那一侧要用），但声明说了软件读不到，
         # 那就不能把写进去的值漏回去——不然 sw: w 这个声明等于没写。
         if f["sw"] == "w":
             return "0"
-        e = f"(zeroExtend({port(reg, f, 1)}) << {f['lo']})"
+        e = f"(zeroExtend({port(reg, f, 1, ix)}) << {f['lo']})"
         # 字段级 feature：关掉时该位读回 0，寄存器随之被优化掉
         if f["feat"] and f["feat"] != reg["feat"]:
             return f"(cfg.{f['feat']} ? {e} : 0)"
         return e
 
-    def read_expr(reg):
+    def read_expr(reg, ix=""):
         if not reg["multi"]:
             f = reg["fields"][0]
             if f["sw"] == "w":
                 return "0"
-            return f"zeroExtend({port(reg, f, 1)})"
-        parts = [_fld_read(reg, f) for f in reg["fields"]]
+            return f"zeroExtend({port(reg, f, 1, ix)})"
+        parts = [_fld_read(reg, f, ix) for f in reg["fields"]]
         return " |\n                      ".join(parts)
 
     L += ["  RegIf#(aw, dw) rf = interface RegIf;",
@@ -349,9 +349,8 @@ def bsv(pkg: Pkg) -> str:
         sub = (f"((off - {aw}'h{base:0{hexw}X}) % {stride})"
                if words > 1 or reg["arr"] else "0")
         # 总线走 CReg 的端口 1，规则走端口 0——软硬双写的字段靠这个定序
-        sfx = "[1]" if (reg["arr"] and dual(f)) else ""
-        tgt = (f"{_sig(reg, f)}_r[{idx}]{sfx}" if reg["arr"]
-               else port(reg, f, 1))
+        ix = f"[{idx}]" if reg["arr"] else ""
+        tgt = port(reg, f, 1, ix)
         # 步长比元素宽的数组，元素只占步长的头一段——只查外层范围的话，
         # 它会把整个步长都吃掉。PLIC 的 thresh（步长 4096）与 claim（base+4，
         # 同样步长 4096）就是这么撞在一起的：写 claim 实际写进了 thresh。
@@ -365,7 +364,31 @@ def bsv(pkg: Pkg) -> str:
         L += [f"      if (off >= {aw}'h{base:0{hexw}X} && "
               f"off < {aw}'h{base:0{hexw}X} + {span}{inElem}{gate}) begin",
               "        err = False;"]
-        if words == 1:
+        if words > 1 and reg["multi"]:
+            raise Bad(f"{reg['name']}：比总线宽的寄存器本版只支持单字段")
+        if words == 1 and reg["multi"]:
+            # 数组也可以是多字段的（pinmux 的 pad 有五个）。原来这条路径只译
+            # fields[0]，另外四个字段有寄存器、有方法，总线上却根本访问不到。
+            L += [f"        Bit#(dw) cur = {read_expr(reg, ix)};",
+                  "        Bit#(dw) nw = applyStrb(cur, wd, r.wstrb);",
+                  "        if (r.write) begin"]
+            for g in reg["fields"]:
+                if g["sw"] in ("rw", "w") and not g["vol"]:
+                    asn = f"{port(reg, g, 1, ix)} <= nw[{g['hi']}:{g['lo']}];"
+                    if g["feat"] and g["feat"] != reg["feat"]:
+                        L.append(f"          if (cfg.{g['feat']}) {asn}")
+                    else:
+                        L.append(f"          {asn}")
+                if g["swmod"]:
+                    L.append(f"          {_sig(reg, g)}_mod.send();")
+                    L.append(f"          {_sig(reg, g)}_mod_i <= truncate({idx});")
+            L += ["        end else begin", "          rd = cur;"]
+            for g in reg["fields"]:
+                if g["swacc"]:
+                    L.append(f"          {_sig(reg, g)}_acc.send();")
+                    L.append(f"          {_sig(reg, g)}_acc_i <= truncate({idx});")
+            L += ["        end"]
+        elif words == 1:
             if f["vol"]:
                 L += [f"        rd = zeroExtend({tgt});   // 硬件驱动，总线只读"]
             elif f["onread"]:

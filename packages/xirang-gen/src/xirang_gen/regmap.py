@@ -217,14 +217,21 @@ def bsv(pkg: Pkg) -> str:
         for f in reg["fields"]:
             s = _sig(reg, f) + "_r"
             init = "0" if f["reset"] is None else str(f["reset"])
+            # 先看是不是数组，再看有没有存储——两者可以同时成立
+            # （mbox 的硬件自旋锁就是「每把锁一份、值由硬件驱动」）。
+            # 白名单管得住不认识的键，管不住不支持的组合，这一处是组合漏了。
+            if reg["arr"]:
+                n = reg["arr"]["count"]
+                if f["vol"]:
+                    L.append(f"  Vector#({n}, Wire#(Bit#({f['w']}))) {s} <- "
+                             f"replicateM(mkDWire(0));")
+                else:
+                    L.append(f"  Vector#({n}, Reg#(Bit#({f['w']}))) {s} <- "
+                             f"replicateM(mkReg({init}));")
+                continue
             if f["vol"]:
                 # 没有存储：硬件每拍驱动，总线只是读它
                 L.append(f"  Wire#(Bit#({f['w']})) {s} <- mkDWire(0);")
-                continue
-            if reg["arr"]:
-                n = reg["arr"]["count"]
-                L.append(f"  Vector#({n}, Reg#(Bit#({f['w']}))) {s} <- "
-                         f"replicateM(mkReg({init}));")
                 continue
             if f["hwset"] and f["woclr"]:
                 # 硬件置位与软件写1清除两处写，须 CReg 定序：端口0给规则、端口1给总线方法
@@ -276,8 +283,15 @@ def bsv(pkg: Pkg) -> str:
         L += [f"      if (off >= {aw}'h{base:0{hexw}X} && off < {aw}'h{base:0{hexw}X} + {span}) begin",
               "        err = False;"]
         if words == 1:
-            L += [f"        if (r.pwrite) {tgt} <= truncate(wd);",
-                  f"        else rd = zeroExtend({tgt});"]  # 两侧都已过渡
+            if f["vol"]:
+                L += [f"        rd = zeroExtend({tgt});   // 硬件驱动，总线只读"]
+            else:
+                L += [f"        if (r.pwrite) {tgt} <= truncate(wd);",
+                      f"        else rd = zeroExtend({tgt});"]
+            if f["swacc"]:
+                L += [f"        if (!r.pwrite) {_sig(reg, f)}_acc.send();"]
+            if f["swmod"]:
+                L += [f"        if (r.pwrite) {_sig(reg, f)}_mod.send();"]  # 两侧都已过渡
         else:
             hi = f"{tgt}[{reg['rw']-1}:{dw_i}]"
             lo = f"{tgt}[{dw_i-1}:0]"

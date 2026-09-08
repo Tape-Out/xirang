@@ -346,12 +346,20 @@ def bsv(pkg: Pkg) -> str:
         cnt = reg["arr"]["count"] if reg["arr"] else 1
         span = f"fromInteger(valueOf({cnt}))*{stride}" if isinstance(cnt, str) else f"{cnt*stride}"
         idx = f"((off - {aw}'h{base:0{hexw}X}) / {stride})"
-        sub = f"((off - {aw}'h{base:0{hexw}X}) % {stride})" if words > 1 else "0"
+        sub = (f"((off - {aw}'h{base:0{hexw}X}) % {stride})"
+               if words > 1 or reg["arr"] else "0")
         # 总线走 CReg 的端口 1，规则走端口 0——软硬双写的字段靠这个定序
         sfx = "[1]" if (reg["arr"] and dual(f)) else ""
         tgt = (f"{_sig(reg, f)}_r[{idx}]{sfx}" if reg["arr"]
                else port(reg, f, 1))
-        L += [f"      if (off >= {aw}'h{base:0{hexw}X} && off < {aw}'h{base:0{hexw}X} + {span}) begin",
+        # 步长比元素宽的数组，元素只占步长的头一段——只查外层范围的话，
+        # 它会把整个步长都吃掉。PLIC 的 thresh（步长 4096）与 claim（base+4，
+        # 同样步长 4096）就是这么撞在一起的：写 claim 实际写进了 thresh。
+        elemBytes = (reg["rw"] // 8) if reg["arr"] else stride
+        inElem = (f" && {sub} < {elemBytes}"
+                  if reg["arr"] and stride > elemBytes else "")
+        L += [f"      if (off >= {aw}'h{base:0{hexw}X} && "
+              f"off < {aw}'h{base:0{hexw}X} + {span}{inElem}) begin",
               "        err = False;"]
         if words == 1:
             if f["vol"]:

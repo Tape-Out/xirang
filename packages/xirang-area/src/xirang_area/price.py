@@ -152,6 +152,13 @@ def gen_digest(pkg: Pkg) -> str | None:
     # 生成器一变，这一份就跟着变。
     if flat_emit(pkg) is not None:
         parts.append(wrap(pkg, resolve_pkg(pkg, {}, "digest", None, {})))
+    # 手写的源码也要进摘要。只看生成物的话，改了 IP 自己的逻辑（uart 的取数、
+    # spi 的采样、timer 的比较）面积明明变了却没人报警——那正是这套机制
+    # 当初要防的「悄悄失效」。
+    src = pkg.root / "bsv"
+    if src.is_dir():
+        for f in sorted(src.glob("*.bsv")):
+            parts.append(f.read_text(encoding="utf-8"))
     return "sha256:" + hashlib.sha256("".join(parts).encode()).hexdigest()[:16]
 
 

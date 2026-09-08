@@ -13,6 +13,8 @@ import yaml
 
 from xirang_area.price import annotate, model_note, stale
 from xirang_back.ecc import synth
+from xirang_core.lock import (check_submodules, make_lock, resolve_deps,
+                              verify_lock, write_lock)
 from xirang_core.manifest import Bad, Pkg
 from xirang_core.model import LAYERS, Resolved
 from xirang_core.resolve import resolve
@@ -100,6 +102,62 @@ def _why(res: Resolved, pkgs, path: str) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- lock
+
+def _index(search) -> dict[str, Pkg]:
+    out = {}
+    for d in search:
+        for p in sorted(d.iterdir()):
+            if (p / "ip.yaml").exists():
+                pk = Pkg(p)
+                if pk.name in out and out[pk.name].root != p:
+                    raise Bad(f"包名 {pk.name} 出现两次："
+                              f"{out[pk.name].root} 与 {p}")
+                out[pk.name] = pk
+    return out
+
+
+def _top_pkg(args, index) -> Pkg:
+    if args.top not in index:
+        raise Bad(f"找不到包 {args.top}")
+    return index[args.top]
+
+
+def cmd_lock(args) -> int:
+    search = _search(args)
+    index = _index(search)
+    top = _top_pkg(args, index)
+    resolved = resolve_deps(top, index)
+    root = search[0]
+    lock = make_lock(top, resolved, root)
+    out = pathlib.Path(args.out or (root / "xirang.lock"))
+    write_lock(lock, out)
+    print(f"{out}  锁定 {len(lock['packages'])} 个包")
+    for p in lock["packages"]:
+        print(f"  {p['name']:<10} {p['version']:<8} {p['kind']:<8} {p['digest']}")
+    return 0
+
+
+def cmd_lint(args) -> int:
+    search = _search(args)
+    index = _index(search)
+    top = _top_pkg(args, index)
+    resolved = resolve_deps(top, index)
+    problems = check_submodules(search[0], resolved)
+    lockf = search[0] / "xirang.lock"
+    if lockf.exists():
+        problems += verify_lock(yaml.safe_load(lockf.read_text(encoding="utf-8")),
+                                resolved)
+    else:
+        problems.append("没有 xirang.lock——跑一次 xirang lock 把解析结果钉住")
+    if not problems:
+        print("干净")
+        return 0
+    for p in problems:
+        print(f"  {p}")
+    return 1
+
+
 # ---------------------------------------------------------------- tree
 
 def cmd_tree(args) -> int:
@@ -156,6 +214,16 @@ def cmd_build(args) -> int:
         annotate(res, pkgs)
     else:
         res, pkgs = _resolve(args)
+
+    if getattr(args, "locked", False):
+        index = _index(search)
+        problems = verify_lock(
+            yaml.safe_load((search[0] / "xirang.lock").read_text(encoding="utf-8")),
+            resolve_deps(index[res.top], index))
+        if problems:
+            for p in problems:
+                print(f"xirang: {p}", file=sys.stderr)
+            return 1
 
     out = pathlib.Path(args.out or "build").resolve()
     (out / "bsv").mkdir(parents=True, exist_ok=True)
@@ -246,12 +314,20 @@ def main(argv=None) -> int:
     e = sub.add_parser("export", help="导出可再导入的完整配置")
     common(e); e.add_argument("-o", "--out"); e.set_defaults(fn=cmd_export)
 
+    lk = sub.add_parser("lock", help="解析依赖并钉住")
+    common(lk); lk.add_argument("-o", "--out"); lk.set_defaults(fn=cmd_lock)
+
+    li = sub.add_parser("lint", help="检查依赖与锁文件")
+    common(li); li.set_defaults(fn=cmd_lint)
+
     b = sub.add_parser("build", help="生成并综合")
     common(b)
     b.add_argument("-o", "--out")
     b.add_argument("--config", help="从导出的配置构建，用于 round-trip 判据")
     b.add_argument("--no-synth", action="store_true")
     b.add_argument("--bsv-path", action="append", help="额外的 BSV 源目录")
+    b.add_argument("--locked", action="store_true",
+                   help="要求锁文件与当前源码一致，不一致即失败")
     b.set_defaults(fn=cmd_build)
 
     args = ap.parse_args(argv)

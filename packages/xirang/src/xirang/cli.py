@@ -539,9 +539,10 @@ def cmd_test(args) -> int:
         seen[key] = lbl
 
         knobs = {k: v.value for k, v in vals.items()}
-        notes, bad = [], False
+        notes, bad, ran = [], False, 0
 
         if has_bsv:
+            ran += 1
             f = out / "bsv" / f"{cap}Bare{lbl}.bsv"
             f.write_text(neutral(pkg, vals, lbl), encoding="utf-8")
             nums = [str(vals[k].value) for k, d in pkg.knobs().items()
@@ -555,6 +556,7 @@ def cmd_test(args) -> int:
                                          else _first_err(log)))
 
         if pkg.regmap:
+            ran += 1
             txt = regs_tb(pkg, vals, lbl)
             if txt:
                 f = out / "bsv" / f"{cap}RegsTb{lbl}.bsv"
@@ -583,6 +585,9 @@ def cmd_test(args) -> int:
                             bad = True
                             notes.append(f"{f.stem}：" + _tail(o))
 
+        if not ran:
+            # 什么都没跑却报绿，比报红还糟——那是在骗人
+            notes.append("这个包既没有实现也没有寄存器图，没有可跑的检查")
         failed += bad
         rows.append((lbl, "✘" if bad else "✔",
                      "；".join(notes) if notes else

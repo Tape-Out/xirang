@@ -173,10 +173,21 @@ def resolve(top: str, search: list[pathlib.Path],
                 desc.setdefault(k, {}).update(v)
             own.update(anc_own)
             vals = resolve_pkg(sub, own, origin, pdk, cli)
-            addr = spec.get("addr")
-            if addr is None and sub.regmap:
-                addr = sub.regmap.get("base")
-            size = sub.regmap.get("size") if sub.regmap else None
+            # 没有控制口的实例（核）不进地址图。它的 regmap 描述的是自己的
+            # CSR 空间，跟片上地址空间没有关系——照搬那个 base 会让两个核
+            # 「重叠」在 0 地址上。
+            shape = ((sub.ip.get("contract") or {}).get("ctrl") or {}).get(
+                "shape", "flat")
+            if shape == "none":
+                addr = spec.get("addr")
+                size = None
+                if addr is not None:
+                    raise Bad(f"{spec['name']} 的包没有控制口，不该给它地址")
+            else:
+                addr = spec.get("addr")
+                if addr is None and sub.regmap:
+                    addr = sub.regmap.get("base")
+                size = sub.regmap.get("size") if sub.regmap else None
             inst = Instance(name=spec["name"], of=spec["of"], values=vals,
                             addr=int(str(addr), 0) if addr is not None else None,
                             size=int(str(size), 0) if size is not None else None,

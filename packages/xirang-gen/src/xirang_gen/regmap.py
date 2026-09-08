@@ -13,6 +13,10 @@ from xirang_core.manifest import Bad, Pkg
 
 SW = {"rw", "r", "w"}
 HW = {"rw", "r", "w", "na"}
+# 字段允许的键。不在表里的一律报错——静默忽略过三次，每次都生成出默默错了的硬件。
+FIELD_KEYS = {"name", "bits", "width", "desc", "sw", "hw", "onwrite", "hwset",
+              "stickybit", "reset", "feature", "volatile", "swacc", "swmod"}
+REG_KEYS = {"name", "offset", "desc", "feature", "fields"}
 
 
 def _cap(s: str) -> str:
@@ -50,6 +54,10 @@ def _rows(spec: dict, params: list[str]) -> list[dict]:
         if off in seen:
             raise Bad(f"偏移 {off:#x} 被 {seen[off]} 与 {r['name']} 同时占用")
         seen[off] = r["name"]
+        unknown = set(r) - REG_KEYS
+        if unknown:
+            raise Bad(f"{r['name']}: 不认识的寄存器键 {sorted(unknown)}"
+                      f"（允许 {sorted(REG_KEYS)}）")
         fs = r.get("fields") or []
         if not fs:
             raise Bad(f"{r['name']}: 没有字段")
@@ -59,6 +67,14 @@ def _rows(spec: dict, params: list[str]) -> list[dict]:
         span = []
         flds = []
         for f in fs:
+            unknown = set(f) - FIELD_KEYS
+            if unknown:
+                raise Bad(f"{r['name']}.{f.get('name')}: 不认识的字段键 {sorted(unknown)}"
+                          f"（允许 {sorted(FIELD_KEYS)}）")
+            if f.get("volatile") and f.get("reset") is not None:
+                raise Bad(f"{r['name']}.{f['name']}: volatile 字段没有存储，不该给 reset")
+            if f.get("volatile") and f.get("hw", "na") not in ("w", "rw"):
+                raise Bad(f"{r['name']}.{f['name']}: volatile 字段的值来自硬件，hw 须是 w 或 rw")
             if f.get("sw", "rw") not in SW:
                 raise Bad(f"{r['name']}.{f['name']}: sw={f.get('sw')} 不在 {sorted(SW)}")
             if f.get("hw", "na") not in HW:
@@ -77,6 +93,8 @@ def _rows(spec: dict, params: list[str]) -> list[dict]:
                 "woclr": f.get("onwrite") == "woclr",
                 "hwset": bool(f.get("hwset")), "reset": f.get("reset"),
                 "feat": f.get("feature") or r.get("feature"),
+                "vol": bool(f.get("volatile")),
+                "swacc": bool(f.get("swacc")), "swmod": bool(f.get("swmod")),
             })
         out.append({"name": r["name"], "offset": off, "desc": r.get("desc", ""),
                     "feat": r.get("feature"), "multi": multi, "fields": flds})
@@ -125,12 +143,16 @@ def bsv(pkg: Pkg) -> str:
     for reg in rs:
         for f in reg["fields"]:
             s = _sig(reg, f)
-            if f["hw"] in ("r", "rw"):
+            if f["hw"] in ("r", "rw") and not f["vol"]:
                 L.append(f"  (* always_ready *) method Bit#({f['w']}) {s};")
             if f["hw"] in ("w", "rw"):
                 L.append(f"  (* always_ready *) method Action {s}_in(Bit#({f['w']}) v);")
             if f["hwset"]:
                 L.append(f"  (* always_ready *) method Action {s}_set(Bit#({f['w']}) v);")
+            if f["swacc"]:
+                L.append(f"  (* always_ready *) method Bool {s}_rd;   // 软件读过一次")
+            if f["swmod"]:
+                L.append(f"  (* always_ready *) method Bool {s}_wr;   // 软件写过一次")
     L += ["endinterface", ""]
 
     cfgarg = f"#({C}RegsCfg cfg)" if feats else ""
@@ -147,11 +169,22 @@ def bsv(pkg: Pkg) -> str:
         for f in reg["fields"]:
             s = _sig(reg, f) + "_r"
             init = "0" if f["reset"] is None else str(f["reset"])
+            if f["vol"]:
+                # 没有存储：硬件每拍驱动，总线只是读它
+                L.append(f"  Wire#(Bit#({f['w']})) {s} <- mkDWire(0);")
+                continue
             if f["hwset"] and f["woclr"]:
                 # 硬件置位与软件写1清除两处写，须 CReg 定序：端口0给规则、端口1给总线方法
                 L.append(f"  Reg#(Bit#({f['w']})) {s}[2] <- mkCReg(2, {init});")
             else:
                 L.append(f"  Reg#(Bit#({f['w']})) {s} <- mkReg({init});")
+    for reg in rs:
+        for f in reg["fields"]:
+            s = _sig(reg, f)
+            if f["swacc"]:
+                L.append(f"  PulseWire {s}_acc <- mkPulseWire;")
+            if f["swmod"]:
+                L.append(f"  PulseWire {s}_mod <- mkPulseWire;")
     L.append("")
 
     def _fld_read(reg, f):
@@ -182,14 +215,21 @@ def bsv(pkg: Pkg) -> str:
             body.append("Bit#(dw) nw = applyStrb(cur, wd, r.pstrb);")
             body.append("if (r.pwrite) begin")
             for f in reg["fields"]:
-                if f["sw"] in ("rw", "w"):
+                if f["sw"] in ("rw", "w") and not f["vol"]:
                     tgt = port(reg, f, 1)
                     asn = f"{tgt} <= nw[{f['hi']}:{f['lo']}];"
                     if f["feat"] and f["feat"] != reg["feat"]:
                         body.append(f"  if (cfg.{f['feat']}) {asn}")
                     else:
                         body.append(f"  {asn}")
-            body.append("end else rd = cur;")
+                if f["swmod"]:
+                    body.append(f"  {_sig(reg, f)}_mod.send();")
+            body.append("end else begin")
+            body.append("  rd = cur;")
+            for f in reg["fields"]:
+                if f["swacc"]:
+                    body.append(f"  {_sig(reg, f)}_acc.send();")
+            body.append("end")
         else:
             f = reg["fields"][0]
             wr = port(reg, f, 1)
@@ -216,7 +256,7 @@ def bsv(pkg: Pkg) -> str:
     for reg in rs:
         for f in reg["fields"]:
             s = _sig(reg, f)
-            if f["hw"] in ("r", "rw"):
+            if f["hw"] in ("r", "rw") and not f["vol"]:
                 L.append(f"  method Bit#({f['w']}) {s} = {port(reg, f, 0)};")
             if f["hw"] in ("w", "rw"):
                 L.append(f"  method Action {s}_in(Bit#({f['w']}) v);"
@@ -224,6 +264,10 @@ def bsv(pkg: Pkg) -> str:
             if f["hwset"]:
                 L.append(f"  method Action {s}_set(Bit#({f['w']}) v);"
                          f" {port(reg, f, 0)} <= {port(reg, f, 0)} | v; endmethod")
+            if f["swacc"]:
+                L.append(f"  method Bool {s}_rd = {s}_acc;")
+            if f["swmod"]:
+                L.append(f"  method Bool {s}_wr = {s}_mod;")
     L += ["endmodule", "", "endpackage"]
     return "\n".join(L) + "\n"
 

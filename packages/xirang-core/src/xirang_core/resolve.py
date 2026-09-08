@@ -23,10 +23,15 @@ class Cascade:
         self.cand: dict[str, list[Candidate]] = {k: [] for k in knobs}
 
     def offer(self, layer: str, values: dict, origin_of):
+        """values 的值可以是裸值，也可以是 (值, 来源) —— 后者用于祖先传下来的覆盖。"""
         for k, v in (values or {}).items():
             if k not in self.cand:
                 raise Bad(f"{origin_of(k)}: 没有名为 {k} 的旋钮")
-            self.cand[k].append(Candidate(layer, v, origin_of(k)))
+            if isinstance(v, tuple) and len(v) == 2 and isinstance(v[1], str):
+                val, org = v
+            else:
+                val, org = v, origin_of(k)
+            self.cand[k].append(Candidate(layer, val, org))
 
     def settle(self) -> dict[str, Value]:
         from .model import LAYERS
@@ -118,6 +123,10 @@ def resolve_pkg(pkg: Pkg, overrides: dict, override_origin: str,
     return vals
 
 
+def _tagged(v) -> bool:
+    return isinstance(v, tuple) and len(v) == 2 and isinstance(v[1], str)
+
+
 def _find_pkg(name: str, search: list[pathlib.Path]) -> Pkg:
     for d in search:
         p = d / name
@@ -133,15 +142,37 @@ def resolve(top: str, search: list[pathlib.Path],
         raise Bad(f"{top} 没有 instances 段，不是装配")
     bus = root.ip.get("bus", "apb4")
 
-    def build(pkg: Pkg, depth: int) -> list[Instance]:
+    def _split(with_: dict, org: str) -> tuple[dict, dict]:
+        """把 with 拆成「自己的」与「后代的」，两边都带上来源。
+
+        后代那份要一路传下去，所以来源必须跟着走——否则面板会把祖先写的值
+        算在直接父层头上。
+        """
+        own, desc = {}, {}
+        for k, v in (with_ or {}).items():
+            if "." in k:
+                head, _, rest = k.partition(".")
+                desc.setdefault(head, {})[rest] = (v, org) if not _tagged(v) else v
+            else:
+                own[k] = (v, org) if not _tagged(v) else v
+        return own, desc
+
+    def build(pkg: Pkg, depth: int, inherited: dict | None = None) -> list[Instance]:
         out = []
+        inherited = inherited or {}
         for spec in pkg.ip.get("instances", []) or []:
             sub = _find_pkg(spec["of"], search)
             if sub.is_library:
                 raise Bad(f"{spec['name']} 例化了库包 {spec['of']}——"
                           f"库包只贡献源码，不会被例化")
             origin = where(pkg.ip, "instances", pkg.path)
-            vals = resolve_pkg(sub, spec.get("with", {}), origin, pdk, cli)
+            own, desc = _split(spec.get("with", {}), origin)
+            # 祖先传下来的覆盖优先于本层的 with——它来自更高的层，且自带来源
+            anc_own, anc_desc = _split(inherited.get(spec["name"], {}), origin)
+            for k, v in anc_desc.items():
+                desc.setdefault(k, {}).update(v)
+            own.update(anc_own)
+            vals = resolve_pkg(sub, own, origin, pdk, cli)
             addr = spec.get("addr")
             if addr is None and sub.regmap:
                 addr = sub.regmap.get("base")
@@ -151,7 +182,9 @@ def resolve(top: str, search: list[pathlib.Path],
                             size=int(str(size), 0) if size is not None else None,
                             bus=spec.get("bus", bus))
             if sub.is_assembly:
-                inst.children = build(sub, depth + 1)
+                inst.children = build(sub, depth + 1, desc)
+            elif desc:
+                raise Bad(f"{spec['name']} 不是装配，配不了后代：{sorted(desc)}")
             out.append(inst)
         return out
 

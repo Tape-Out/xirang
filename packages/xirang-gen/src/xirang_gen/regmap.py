@@ -12,7 +12,20 @@ import pathlib
 from xirang_core.manifest import Bad, Pkg
 
 # 改动会改变生成的逻辑，从而让已回填的面积失效。改生成逻辑就要进版本。
-GEN_VERSION = "0.3"
+GEN_VERSION = "0.4"   # 仅供人读；失效判定看生成产物的摘要，不看这个
+
+# BSV 与 Verilog 的保留字。寄存器或字段叫这些名字，会一路生成到编译才炸，
+# 而且报的是语法错、指不回 regmap.yaml。在生成时就拦住。
+RESERVED = {
+    "time", "reg", "wire", "input", "output", "inout", "module", "endmodule",
+    "begin", "end", "if", "else", "case", "endcase", "default", "function",
+    "endfunction", "interface", "endinterface", "method", "rule", "endrule",
+    "return", "let", "match", "action", "endaction", "package", "endpackage",
+    "type", "typedef", "struct", "enum", "union", "provisos", "instance",
+    "parameter", "assign", "always", "posedge", "negedge", "initial", "and",
+    "or", "not", "xor", "nand", "nor", "buf", "real", "integer", "signed",
+    "bit", "logic", "int", "void", "clock", "reset", "port", "for", "while",
+}
 
 SW = {"rw", "r", "w"}
 HW = {"rw", "r", "w", "na"}
@@ -58,6 +71,9 @@ def _rows(spec: dict, params: list[str], dw: int = 32) -> list[dict]:
         if off in seen:
             raise Bad(f"偏移 {off:#x} 被 {seen[off]} 与 {r['name']} 同时占用")
         seen[off] = r["name"]
+        if r.get("name") in RESERVED:
+            raise Bad(f"寄存器名 {r['name']!r} 是 BSV/Verilog 保留字，换一个"
+                      f"（生成出来会是语法错，且指不回 regmap.yaml）")
         unknown = set(r) - REG_KEYS
         if unknown:
             raise Bad(f"{r['name']}: 不认识的寄存器键 {sorted(unknown)}"
@@ -86,6 +102,8 @@ def _rows(spec: dict, params: list[str], dw: int = 32) -> list[dict]:
         span = []
         flds = []
         for f in fs:
+            if f.get("name") in RESERVED:
+                raise Bad(f"{r['name']}.{f['name']}: 字段名是 BSV/Verilog 保留字，换一个")
             unknown = set(f) - FIELD_KEYS
             if unknown:
                 raise Bad(f"{r['name']}.{f.get('name')}: 不认识的字段键 {sorted(unknown)}"

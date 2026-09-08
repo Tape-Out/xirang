@@ -103,16 +103,31 @@ def annotate(res: Resolved, pkgs: dict[str, Pkg]) -> Resolved:
     return res
 
 
+def gen_digest(pkg: Pkg) -> str | None:
+    """当前生成器会为这个包吐出什么——对产物取摘要。
+
+    手工维护版本号两头不讨好：忘了升是漏报，升了没改输出是误报（0.4 只加了
+    一条校验，输出与 0.3 逐字节相同，却报了过期）。对**产物**取摘要，两种错都没有。
+    """
+    if not pkg.regmap:
+        return None
+    import hashlib
+    from xirang_gen.regmap import bsv
+    return "sha256:" + hashlib.sha256(bsv(pkg).encode()).hexdigest()[:16]
+
+
 def stale(pkg: Pkg) -> str | None:
-    """价目表是不是在别的生成器版本下量的。是的话，它可能已经悄悄失效了。"""
-    from xirang_gen.regmap import GEN_VERSION
+    """价目表是不是对着另一份生成产物量的。是的话它已经悄悄失效了。"""
     c = (pkg.ip.get("area") or {}).get("corner") or {}
-    got = c.get("generator")
+    if not pkg.regmap:
+        return None
+    got = c.get("gen_digest")
+    now = gen_digest(pkg)
     if got is None:
-        return f"{pkg.name} 的价目表没记生成器版本，无法判断是否失效"
-    if str(got) != GEN_VERSION:
-        return (f"{pkg.name} 的价目表是生成器 {got} 量的，现在是 {GEN_VERSION}——"
-                f"生成的逻辑变了，面积很可能已失效，重测再用")
+        return f"{pkg.name} 的价目表没记生成产物摘要，无法判断是否失效"
+    if str(got) != now:
+        return (f"{pkg.name} 的价目表是对着另一份生成产物量的（记的 {got}，"
+                f"现在 {now}）——生成的逻辑变了，面积已失效，重测再用")
     return None
 
 
@@ -126,7 +141,7 @@ def model_note(pkg: Pkg) -> str:
     c = a.get("corner") or {}
     if not a:
         return "无价目表"
-    gen = c.get("generator", "?")
+    gen = c.get("gen_digest", "?")
     return (f"{a.get('model', '?')}/{_shape(a.get('base'))}，生成器 {gen}，"
             f"误差界 {e.get('bound', '?')}"
             f"（{'恒为高估' if e.get('sign') == 'over' else e.get('sign', '?')}），"

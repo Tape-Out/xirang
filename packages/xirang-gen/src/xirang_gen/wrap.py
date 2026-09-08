@@ -85,6 +85,9 @@ def wrap(pkg: Pkg, vals) -> str:
     if e is None:
         raise Bad(f"{pkg.name} 的 emit 里没有 verilog-flat")
     shape = ((pkg.ip.get("contract") or {}).get("ctrl") or {}).get("shape", "flat")
+    if shape == "none":
+        raise Bad(f"{pkg.name} 没有控制口，扁平化无从谈起——"
+                  f"它不是总线从设备。要独立综合就跑 build --neutral")
     if shape != "flat":
         raise Bad(f"{pkg.name} 的契约形态是 {shape}，本版只给 flat 生成扁平顶层。"
                   f"server 形态要先接一个绑定器，代价另计")
@@ -144,8 +147,13 @@ def neutral(pkg: Pkg, vals) -> str:
     s = _shape(pkg, vals)
     b, cap = s["b"], s["cap"]
 
-    ifc = [f"interface {cap}BareIfc;",
-           f"  interface RegIf#({s['aw']}, {s['dw']}) {s['ctrl_name']};"]
+    # 核这类只发起、不被访问的 IP 没有控制口。它的 CSR 空间是自己用的，
+    # 引到顶层会让「规则用」与「外面用」抢同一个方法，规则于是永不触发。
+    none = (((pkg.ip.get("contract") or {}).get("ctrl") or {})
+            .get("shape") == "none")
+    ifc = [f"interface {cap}BareIfc;"]
+    if not none:
+        ifc.append(f"  interface RegIf#({s['aw']}, {s['dw']}) {s['ctrl_name']};")
     ifc += [f"  interface {x['type']}{sub_targs(x, vals, pkg.name)} {x['name']};"
             for x in s["subs"]]
     ifc += [f"  (* always_ready *) method {irq_type(w, vals)} {n};"
@@ -153,8 +161,9 @@ def neutral(pkg: Pkg, vals) -> str:
     ifc.append("endinterface")
 
     body = [f"  {b['interface']}#({s['targs']}) m <- {b['module']}"
-            f"({b['config_type']} {{ {s['feats']} }});",
-            f"  interface {s['ctrl_name']} = m.{s['ctrl_name']};"]
+            f"({b['config_type']} {{ {s['feats']} }});"]
+    if not none:
+        body.append(f"  interface {s['ctrl_name']} = m.{s['ctrl_name']};")
     body += [f"  interface {x['name']} = m.{x['name']};" for x in s["subs"]]
     body += [f"  method {irq_type(w, vals)} {n} = m.{n};" for n, w in s["irqs"]]
 

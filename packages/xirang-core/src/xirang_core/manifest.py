@@ -47,6 +47,9 @@ def where(node, key: str, path: str) -> str:
     return f"{path}:{ln}" if ln else path
 
 
+CTRL_SHAPES = {"flat", "server", "none"}
+
+
 class Pkg:
     """一个包的清单。有 instances 就是装配，没有就是叶子 IP。"""
 

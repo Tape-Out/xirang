@@ -1,0 +1,168 @@
+"""从 regmap.yaml 生成寄存器一致性测试。
+
+类型检查看的是「能不能建」，调度门禁看的是「会不会卡」，这一份看的是
+「读写对不对」——而生成的译码、掩码、字段落位正是最容易悄悄错的那部分。
+`hart` 的译码错误说明前两道全过也可能是错的。
+
+测什么：
+  · 软件可写、非 volatile、非 woclr 的字段：写全一读回等于字段掩码，写全零读回零
+  · 保留位与关掉的特性位：一律读回零
+  · woclr 字段：只验写一清零
+  · volatile 字段：跳过——它们的值来自硬件，要各 IP 自己的测试台驱动
+
+不涉及 IP 的行为，只涉及寄存器组。行为归各仓自己的 tb。
+"""
+from __future__ import annotations
+
+import copy
+
+from xirang_core.manifest import Bad, Pkg
+from xirang_gen.regmap import _cap, _rows
+
+
+def _mask(f) -> int:
+    return ((1 << int(f["w"])) - 1) << f["lo"] if str(f["w"]).isdigit() else 0
+
+
+def regs_tb(pkg: Pkg, vals) -> str:
+    spec = pkg.regmap
+    if not spec:
+        raise Bad(f"{pkg.name} 没有 regmap.yaml")
+    C = _cap(spec.get("ip", pkg.name))
+    ctrl = spec.get("contract") or {}
+    aw, dw = int(ctrl.get("aw", 8)), int(ctrl.get("dw", 32))
+    # 寄存器组是参数化的，测试台要具体数：把解析后的旋钮值代进 regmap 的副本，
+    # 位宽与份数于是都变成常量，`_rows` 再算出来的就是这一份配置的真实布局。
+    nums = {k: v.value for k, v in vals.items() if isinstance(v.value, int)}
+    spec = copy.deepcopy(spec)
+    for r in spec.get("regs", []) or []:
+        for f in r.get("fields", []) or []:
+            if isinstance(f.get("width"), str) and f["width"] in nums:
+                f["width"] = nums[f["width"]]
+        a = r.get("array")
+        if a and isinstance(a.get("count"), str) and a["count"] in nums:
+            a["count"] = nums[a["count"]]
+    rs = _rows(spec, [], dw)
+    feats = {k: v.value for k, v in vals.items()
+             if pkg.knobs().get(k, {}).get("kind") == "feature"}
+
+    cases = []
+    for reg in rs:
+        # 数组与宽寄存器的地址是算出来的，第一版只测标量
+        if reg["arr"] or reg["rw"] > dw:
+            continue
+        if reg["feat"] and not feats.get(reg["feat"], False):
+            # 特性关掉：整个寄存器应当读回零
+            cases.append((reg["offset"], 0, 0, f"{reg['name']} (feature off)"))
+            continue
+        wr = 0     # 写全一之后应当读回什么
+        for f in reg["fields"]:
+            if str(f["w"]).isdigit() is False:
+                wr = None
+                break
+            on = (not f["feat"]) or feats.get(f["feat"], False)
+            keep = (f["sw"] in ("rw", "w") and not f["vol"] and not f["woclr"]
+                    and f["sw"] != "w")
+            # sw: w 的字段读回零；woclr 写一即清；volatile 由硬件驱动
+            if on and keep:
+                wr |= _mask(f)
+        if wr is None:
+            continue
+        cases.append((reg["offset"], wr, 0, reg["name"]))
+
+    if not cases:
+        # 全是数组或宽寄存器（pinmux、aclint 就是），本版测不了。不是错。
+        return ""
+
+    hexw = (aw + 3) // 4
+    body = []
+    for i, (off, want1, want0, name) in enumerate(cases):
+        body.append(f"      {i}: return Chk {{ off: {aw}'h{off:0{hexw}X}, "
+                    f"ones: {dw}'h{want1:0{dw // 4}X}, "
+                    f"zeros: {dw}'h{want0:0{dw // 4}X} }};   // {name}")
+
+    knobs = pkg.knobs()
+    # Cfg 里只有寄存器图真的用到的特性——IP 的其它开关不在寄存器组的视野里
+    used = sorted({f["feat"] for r in rs for f in r["fields"] if f["feat"]}
+                  | {r["feat"] for r in rs if r["feat"]})
+    args = ", ".join(f"{k}: {'True' if vals[k].value else 'False'}" for k in used)
+    nums = [str(vals[k].value) for k in knobs if knobs[k]["kind"] == "param"]
+    targs = ", ".join([str(aw), str(dw)] + nums)
+    cfg = f"{C}RegsCfg {{ {args} }}" if args else ""
+
+    return f"""package {C}RegsTb;
+
+// 由 xirang 从 regmap.yaml 生成，勿手改。
+
+import RegIf::*;
+import {C}Regs::*;
+
+typedef struct {{
+  Bit#({aw}) off;
+  Bit#({dw}) ones;
+  Bit#({dw}) zeros;
+}} Chk deriving (Bits);
+
+Integer nchk = {len(cases)};
+
+function Chk chk(Integer i);
+  case (i)
+{chr(10).join(body)}
+    default: return Chk {{ off: 0, ones: 0, zeros: 0 }};
+  endcase
+endfunction
+
+(* synthesize *)
+module mk{C}RegsTb(Empty);
+  {C}RegsIfc#({targs}) r <- mk{C}Regs({cfg});
+
+  Reg#(Bit#(16)) step <- mkReg(0);
+  Reg#(Bool)     bad  <- mkReg(False);
+
+  rule run;
+    Integer i = 0;
+    Bit#(16) n = step >> 2;
+    Bit#(2)  ph = truncate(step);
+    if (n >= fromInteger(nchk)) begin
+      if (bad) $display("FAILED");
+      else $display("PASS all %0d register checks", nchk);
+      $finish(bad ? 1 : 0);
+    end else begin
+      Chk c = chk(0);
+      for (Integer j = 0; j < nchk; j = j + 1)
+        if (n == fromInteger(j)) c = chk(j);
+      case (ph)
+        0: begin
+          let _ <- r.regs.access(RegReq {{ addr: zeroExtend(c.off), write: True,
+                                          wdata: '1, wstrb: '1 }});
+        end
+        1: begin
+          let x <- r.regs.access(RegReq {{ addr: zeroExtend(c.off), write: False,
+                                          wdata: 0, wstrb: '1 }});
+          if (x.rdata != c.ones) begin
+            $display("FAIL ones at %0h: got %08h want %08h",
+                     c.off, x.rdata, c.ones);
+            bad <= True;
+          end
+        end
+        2: begin
+          let _ <- r.regs.access(RegReq {{ addr: zeroExtend(c.off), write: True,
+                                          wdata: 0, wstrb: '1 }});
+        end
+        default: begin
+          let x <- r.regs.access(RegReq {{ addr: zeroExtend(c.off), write: False,
+                                          wdata: 0, wstrb: '1 }});
+          if (x.rdata != c.zeros) begin
+            $display("FAIL zeros at %0h: got %08h want %08h",
+                     c.off, x.rdata, c.zeros);
+            bad <= True;
+          end
+        end
+      endcase
+      step <= step + 1;
+    end
+  endrule
+endmodule
+
+endpackage
+"""

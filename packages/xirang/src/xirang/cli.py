@@ -21,6 +21,7 @@ from xirang_core.model import LAYERS, Resolved
 from xirang_core.resolve import resolve, resolve_pkg
 from xirang_gen.assemble import addr_map, assemble
 from xirang_gen.regmap import generate as gen_regmap
+from xirang_gen.tb import regs_tb
 from xirang_gen.wrap import BUSES, flat_emit, neutral, wrap
 
 BOLD, DIM, OFF = "\033[1m", "\033[2m", "\033[0m"
@@ -200,6 +201,18 @@ def cmd_gen(args) -> int:
     (out / "bsv").mkdir(parents=True, exist_ok=True)
     (out / "sw").mkdir(parents=True, exist_ok=True)
     gen_regmap(pkg, out / "bsv", out / "sw")
+    if getattr(args, "tb", False):
+        cli = {}
+        for kv in args.set or []:
+            k, _, v = kv.partition("=")
+            cli[k] = yaml.safe_load(v)
+        vals = resolve_pkg(pkg, {}, f"{pkg.path} (default)", None, cli)
+        cap = (pkg.regmap.get("ip", pkg.name))[:1].upper()             + (pkg.regmap.get("ip", pkg.name))[1:]
+        txt = regs_tb(pkg, vals)
+        if txt:
+            (out / "bsv" / f"{cap}RegsTb.bsv").write_text(txt, encoding="utf-8")
+        else:
+            print("  （寄存器全是数组或宽寄存器，本版的一致性测试测不了）")
     for p in sorted((out / "bsv").glob("*.bsv")) + sorted((out / "sw").glob("*")):
         print(f"  {p}")
     return 0
@@ -471,7 +484,10 @@ def main(argv=None) -> int:
     e.set_defaults(fn=cmd_export)
 
     ge = sub.add_parser("gen", help="只生成寄存器组与 C 头")
-    common(ge); ge.add_argument("-o", "--out"); ge.set_defaults(fn=cmd_gen)
+    common(ge); ge.add_argument("-o", "--out")
+    ge.add_argument("--tb", action="store_true",
+                    help="连寄存器一致性测试一起生成")
+    ge.set_defaults(fn=cmd_gen)
 
     lk = sub.add_parser("lock", help="解析依赖并钉住")
     common(lk); lk.add_argument("-o", "--out"); lk.set_defaults(fn=cmd_lock)

@@ -314,6 +314,10 @@ def bsv(pkg: Pkg) -> str:
     L.append("")
 
     def _fld_read(reg, f):
+        # 只写字段读回零。存是要存的（硬件那一侧要用），但声明说了软件读不到，
+        # 那就不能把写进去的值漏回去——不然 sw: w 这个声明等于没写。
+        if f["sw"] == "w":
+            return "0"
         e = f"(zeroExtend({port(reg, f, 1)}) << {f['lo']})"
         # 字段级 feature：关掉时该位读回 0，寄存器随之被优化掉
         if f["feat"] and f["feat"] != reg["feat"]:
@@ -323,6 +327,8 @@ def bsv(pkg: Pkg) -> str:
     def read_expr(reg):
         if not reg["multi"]:
             f = reg["fields"][0]
+            if f["sw"] == "w":
+                return "0"
             return f"zeroExtend({port(reg, f, 1)})"
         parts = [_fld_read(reg, f) for f in reg["fields"]]
         return " |\n                      ".join(parts)
@@ -355,6 +361,8 @@ def bsv(pkg: Pkg) -> str:
                 L += [f"        rd = zeroExtend({tgt});",
                       f"        if (r.write) {tgt} <= truncate(wd);",
                       f"        else {tgt} <= {v};"]
+            elif f["sw"] == "w":
+                L += [f"        if (r.write) {tgt} <= truncate(wd);"]
             else:
                 L += [f"        if (r.write) {tgt} <= truncate(wd);",
                       f"        else rd = zeroExtend({tgt});"]

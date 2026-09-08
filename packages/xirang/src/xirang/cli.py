@@ -526,6 +526,27 @@ def _unused_methods(pkg: Pkg, gen_dir: pathlib.Path) -> list[str]:
                    f"——要么实现，要么写进 ip.yaml 的 test.unused 并说明为什么")
     return out
 
+def _flat_param(pkg: Pkg) -> list[str]:
+    """价目表里曲线平坦的参数：它什么也没改变。
+
+    综合器对同一份 RTL 的重现性在百分之三上下，而一个真的进了数据通路的
+    参数不可能几个格点分毫不差。`i2c` 的 fifoDepth 就是这么露的馅——
+    从 1 到 8 都是 1029.56，回去看代码，队列一个都没例化。
+
+    这条判据比扫源码还便宜：数据早就躺在 ip.yaml 里。
+    """
+    base = ((pkg.ip.get("area") or {}).get("base") or {})
+    pts, per = base.get("points"), base.get("per")
+    if not pts or not per or len(pts) < 2:
+        return []
+    vals = [float(v) for v in pts.values()]
+    lo, hi = min(vals), max(vals)
+    if hi <= 0 or (hi - lo) / hi >= 0.005:
+        return []
+    return [f"价目表里 {per} 的曲线是平的（{len(pts)} 个格点，"
+            f"{lo:,.2f} 到 {hi:,.2f}）——这个参数什么也没改变。"
+            f"要么实现它，要么把它从清单里去掉"]
+
 def cmd_test(args) -> int:
     """把一个 IP 在整张矩阵上验一遍：调度门禁、寄存器一致性、各仓自己的行为测试。"""
     index = _index(_search(args))
@@ -551,12 +572,13 @@ def cmd_test(args) -> int:
     has_bsv = (pkg.root / "bsv").is_dir()
     cap = pkg.name[:1].upper() + pkg.name[1:]
 
+    problems = _flat_param(pkg)
     if pkg.regmap:
-        problems = _unused_methods(pkg, out / "bsv")
-        for q in problems:
-            print(f"  {BOLD}✘{OFF} {q}")
-        if problems:
-            return 1
+        problems += _unused_methods(pkg, out / "bsv")
+    for q in problems:
+        print(f"  {BOLD}✘{OFF} {q}")
+    if problems:
+        return 1
 
     pts = points(pkg)
     if args.point:

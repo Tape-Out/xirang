@@ -182,6 +182,26 @@ def cmd_tree(args) -> int:
 
 # ---------------------------------------------------------------- wrap
 
+def cmd_gen(args) -> int:
+    """只从 regmap.yaml 生成寄存器组与 C 头。
+
+    还没写 BSV 的仓也能过门禁——寄存器图本身就该被检查，不必等实现。
+    """
+    index = _index(_search(args))
+    if args.top not in index:
+        raise Bad(f"找不到包 {args.top}")
+    pkg = index[args.top]
+    if not pkg.regmap:
+        raise Bad(f"{args.top} 没有 regmap.yaml，没什么可生成的")
+    out = pathlib.Path(args.out or "gen")
+    (out / "bsv").mkdir(parents=True, exist_ok=True)
+    (out / "sw").mkdir(parents=True, exist_ok=True)
+    gen_regmap(pkg, out / "bsv", out / "sw")
+    for p in sorted((out / "bsv").glob("*.bsv")) + sorted((out / "sw").glob("*")):
+        print(f"  {p}")
+    return 0
+
+
 def cmd_wrap(args) -> int:
     """给一个叶子 IP 生成扁平端口顶层。装配没有这一层——它本身就是顶层。"""
     search = _search(args)
@@ -443,6 +463,9 @@ def main(argv=None) -> int:
                    help="导出目标。别人的格式一律是导出目标，不在执行路径上")
     e.add_argument("--build", help="tar 与 core 要读的生成物目录")
     e.set_defaults(fn=cmd_export)
+
+    ge = sub.add_parser("gen", help="只生成寄存器组与 C 头")
+    common(ge); ge.add_argument("-o", "--out"); ge.set_defaults(fn=cmd_gen)
 
     lk = sub.add_parser("lock", help="解析依赖并钉住")
     common(lk); lk.add_argument("-o", "--out"); lk.set_defaults(fn=cmd_lock)

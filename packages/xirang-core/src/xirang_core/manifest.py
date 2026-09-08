@@ -49,6 +49,9 @@ def where(node, key: str, path: str) -> str:
 
 CTRL_SHAPES = {"flat", "server", "none"}
 
+# 规范对源语言是开放的，实现目前只有 BSV 与 BH 两个前端。写成序列表示混用。
+LANGS = {"bsv", "bh", "verilog", "sv", "vhdl", "chisel", "spinal"}
+
 # 顶层键的白名单。写错一个键就被默默忽略，比报错糟得多——
 # 「area」写成「areas」，价目表整个失效而没人知道。
 TOP_KEYS = {"name", "version", "spec", "kind", "lang", "identity", "contract",
@@ -86,6 +89,10 @@ class Pkg:
         unknown = set(ip) - TOP_KEYS
         if unknown:
             raise Bad(f"{self.path}: 不认识的顶层键 {sorted(unknown)}")
+        lang = ip.get("lang", "bsv")
+        bad = set(lang if isinstance(lang, list) else [lang]) - LANGS
+        if bad:
+            raise Bad(f"{self.path}: 不认识的 lang {sorted(bad)}")
         for k in ("name", "version", "spec"):
             if k not in ip:
                 raise Bad(f"{self.path} 缺 {k}")

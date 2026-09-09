@@ -99,8 +99,9 @@ def recal(pkg: Pkg, search: list[pathlib.Path], apply: bool,
         new, old = measure(pkg, at, search), float(row["um2"])
         row["um2"] = new
         val[_canon(at, dflt)] = new
-        line = (f"{at}  {old:,.2f} -> {new:,.2f}"
-                f"  ({(new - old) / old * 100:+.2f}%)")
+        # 新加的行旧值是 0（占位），别拿它做分母
+        pct = f"  ({(new - old) / old * 100:+.2f}%)" if old else "  （新行）"
+        line = f"{at}  {old:,.2f} -> {new:,.2f}{pct}"
         log.append(line)
         say(f"  {line}")
 

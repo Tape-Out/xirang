@@ -86,7 +86,13 @@ def regs_tb(pkg: Pkg, vals, suffix: str = "") -> str:
     used = sorted({f["feat"] for r in rs for f in r["fields"] if f["feat"]}
                   | {r["feat"] for r in rs if r["feat"]})
     args = ", ".join(f"{k}: {'True' if vals[k].value else 'False'}" for k in used)
-    nums = [str(vals[k].value) for k in knobs if knobs[k]["kind"] == "param"]
+    # 类型参数按**寄存器图**声明的那几个来。IP 还有别的参数（cache 的行数与
+    # 行宽只影响实现），寄存器接口里没有它们的位置，照 ip.yaml 填就多出几个。
+    rmp = list((pkg.regmap or {}).get("params") or [])
+    nums = [str(vals[k].value) for k in rmp if k in vals]
+    miss = [k for k in rmp if k not in vals]
+    if miss:
+        raise Bad(f"{pkg.name} 的寄存器图用了清单里没有的参数 {miss}")
     targs = ", ".join([str(aw), str(dw)] + nums)
     cfg = f"{C}RegsCfg {{ {args} }}" if args else ""
 

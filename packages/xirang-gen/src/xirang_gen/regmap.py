@@ -124,6 +124,10 @@ def _rows(spec: dict, params: list[str], dw: int = 32) -> list[dict]:
                 raise Bad(f"{r['name']}.{f['name']}: 本版 onwrite 只支持 woclr")
             if f.get("onread") is not None and f["onread"] not in ONREAD:
                 raise Bad(f"{r['name']}.{f['name']}: onread 只支持 {sorted(ONREAD)}")
+            if f.get("hwset") and f.get("hw", "na") in ("w", "rw"):
+                raise Bad(f"{r['name']}.{f['name']}: hwset 与 hw=w/rw 抢同一个写端口，二选一")
+            if f.get("hwset") and r.get("array"):
+                raise Bad(f"{r['name']}.{f['name']}: 数组字段本版不生成 _set，hwset 用不了")
             if f.get("wrdata") and not f.get("swmod"):
                 raise Bad(f"{r['name']}.{f['name']}: wrdata 要跟 swmod 一起用——取写进来的值，总得先知道这一拍有没有写")
             if f.get("wrdata") and f.get("sw") not in ("rw", "w"):
@@ -215,12 +219,23 @@ def bsv(pkg: Pkg) -> str:
         """
         if f["vol"]:
             return False
-        return (f["hwset"] and f["woclr"]) or (
+        return (f["hwset"] and f["sw"] in ("rw", "w")) or (
             f["hw"] in ("w", "rw") and f["sw"] in ("w", "rw"))
 
     def port(reg, f, p, ix=""):
         s = _sig(reg, f) + "_r" + ix
         return f"{s}[{p}]" if dual(f) else s
+
+    def setback(reg, f) -> str:
+        """`hwset` 字段写回时要把这一拍的置位 OR 回去。
+
+        置位在端口 0、总线在端口 1，于是同一拍里软件的写清排在置位之后，
+        这一次事件就被抹掉了——而 `stickybit` 的含义正是「事件不会丢」。
+        对调端口能解决，但会把调度绕成环（`dma` 与 `rtc` 当场报 G0095：
+        总线方法与规则之间出现经过规则的路径）。改成不动调度的做法：
+        置位顺手驱一根线，总线写回时 OR 回来。
+        """
+        return f" | {_sig(reg, f)}_setw" if f["hwset"] else ""
 
     L: list[str] = [f"package {C}Regs;", "",
                     "// 由 regmap.yaml 生成，勿手改。改 regmap.yaml 后重新生成。", "",
@@ -354,6 +369,9 @@ def bsv(pkg: Pkg) -> str:
                 if reg["arr"]:
                     L.append(f"  Wire#(Bit#(TLog#(TAdd#({reg['arr']['count']}, 1))))"
                              f" {s}_mod_i <- mkDWire(0);")
+            if f["hwset"]:
+                # 置位与总线写回撞同一拍时，靠它把置位 OR 回去
+                L.append(f"  Wire#(Bit#({f['w']})) {s}_setw <- mkDWire(0);")
             # 一拍最多一次写，所以数组也只要一根线
             if f["wrdata"]:
                 L.append(f"  Wire#(Bit#({f['w']})) {s}_mod_v <- mkDWire(0);")
@@ -428,7 +446,8 @@ def bsv(pkg: Pkg) -> str:
                   "        if (r.write) begin"]
             for g in reg["fields"]:
                 if g["sw"] in ("rw", "w") and not g["vol"]:
-                    asn = f"{port(reg, g, 1, ix)} <= nw[{g['hi']}:{g['lo']}];"
+                    asn = (f"{port(reg, g, 1, ix)} <= "
+                           f"nw[{g['hi']}:{g['lo']}]{setback(reg, g)};")
                     if g["feat"] and g["feat"] != reg["feat"]:
                         L.append(f"          if (cfg.{g['feat']}) {asn}")
                     else:
@@ -509,7 +528,8 @@ def bsv(pkg: Pkg) -> str:
             for f in src["fields"]:
                 if f["sw"] in ("rw", "w") and not f["vol"]:
                     tgtp = port(src, f, 1)
-                    asn = f"{tgtp} <= nw[{f['hi']}:{f['lo']}];"
+                    asn = (f"{tgtp} <= nw[{f['hi']}:{f['lo']}]"
+                           f"{setback(src, f)};")
                     if f["feat"] and f["feat"] != reg["feat"]:
                         body.append(f"  if (cfg.{f['feat']}) {asn}")
                     else:
@@ -525,11 +545,13 @@ def bsv(pkg: Pkg) -> str:
         else:
             f = src["fields"][0]
             wr = port(src, f, 1)
+            sb = setback(src, f)
             if f["woclr"]:
-                body = [f"if (r.write) {wr} <= {wr} & ~truncate(wd);",
+                body = [f"if (r.write) {wr} <= ({wr} & ~truncate(wd)){sb};",
                         f"else rd = zeroExtend({wr});"]
             elif f["sw"] == "rw":
-                body = [f"if (r.write) {wr} <= truncate(applyStrb(zeroExtend({wr}), wd, r.wstrb));",
+                body = [f"if (r.write) {wr} <= truncate("
+                        f"applyStrb(zeroExtend({wr}), wd, r.wstrb)){sb};",
                         f"else rd = zeroExtend({wr});"]
             elif f["sw"] == "r":
                 body = [f"rd = zeroExtend({wr});"]
@@ -602,7 +624,8 @@ def bsv(pkg: Pkg) -> str:
                          f" {port(reg, f, 0)} <= v; endmethod")
             if f["hwset"]:
                 L.append(f"  method Action {s}_set(Bit#({f['w']}) v);"
-                         f" {port(reg, f, 0)} <= {port(reg, f, 0)} | v; endmethod")
+                         f" {port(reg, f, 0)} <= {port(reg, f, 0)} | v;"
+                         f" {s}_setw <= v; endmethod")
             if f["swacc"]:
                 L.append(f"  method Bool {s}_rd = {s}_acc;")
             if f["swmod"]:

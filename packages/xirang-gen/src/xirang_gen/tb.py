@@ -9,6 +9,7 @@
   · 保留位与关掉的特性位：一律读回零
   · woclr 字段：只验写一清零
   · volatile 字段：跳过——它们的值来自硬件，要各 IP 自己的测试台驱动
+  · hwset 字段：同一拍里硬件置位撞上软件写清，置位必须压过写清（事件不许丢）
 
 不涉及 IP 的行为，只涉及寄存器组。行为归各仓自己的 tb。
 """
@@ -17,7 +18,7 @@ from __future__ import annotations
 import copy
 
 from xirang_core.manifest import Bad, Pkg
-from xirang_gen.regmap import _cap, _rows
+from xirang_gen.regmap import _cap, _rows, _sig
 
 
 def _mask(f) -> int:
@@ -70,11 +71,36 @@ def regs_tb(pkg: Pkg, vals, suffix: str = "") -> str:
             continue
         cases.append((reg["offset"], wr, 0, reg["name"]))
 
+    # hwset 的字段单列一张表：置位与写清同拍，读回来必须还在。
+    # 只收标量——数组本版不生成 _set。
+    races = []
+    for reg in rs:
+        if reg["arr"] or reg["rw"] > dw:
+            continue
+        if reg["feat"] and not feats.get(reg["feat"], False):
+            continue
+        for f in reg["fields"]:
+            if not f["hwset"] or not str(f["w"]).isdigit():
+                continue
+            if f["feat"] and not feats.get(f["feat"], False):
+                continue
+            m = _mask(f)
+            # woclr 是写一清零，其余可写字段是写零清零
+            races.append((reg["offset"], m if f["woclr"] else 0, m,
+                          _sig(reg, f), f"{reg['name']}.{f['name']}"))
+
     if not cases:
         # 全是数组或宽寄存器（pinmux、aclint 就是），本版测不了。不是错。
         return ""
 
     hexw = (aw + 3) // 4
+    rbody = chr(10).join(
+        f"      {i}: return Rc {{ off: {aw}'h{off:0{hexw}X}, "
+        f"clr: {dw}'h{clr:0{dw // 4}X}, msk: {dw}'h{msk:0{dw // 4}X} }};   // {nm}"
+        for i, (off, clr, msk, _sg, nm) in enumerate(races))
+    rsets = chr(10).join(
+        f"    if (n == {i}) r.{sg}_set('1);"
+        for i, (_o, _c, _m, sg, _nm) in enumerate(races))
     body = []
     for i, (off, want1, want0, name) in enumerate(cases):
         body.append(f"      {i}: return Chk {{ off: {aw}'h{off:0{hexw}X}, "
@@ -109,7 +135,22 @@ typedef struct {{
   Bit#({dw}) zeros;
 }} Chk deriving (Bits);
 
-Integer nchk = {len(cases)};
+// 硬件置位撞上软件写清那一组：clr 是能清掉它的写值，msk 是必须留下的位
+typedef struct {{
+  Bit#({aw}) off;
+  Bit#({dw}) clr;
+  Bit#({dw}) msk;
+}} Rc deriving (Bits);
+
+Integer nchk  = {len(cases)};
+Integer nrace = {len(races)};
+
+function Rc rc(Integer i);
+  case (i)
+{rbody}
+    default: return Rc {{ off: 0, clr: 0, msk: 0 }};
+  endcase
+endfunction
 
 function Chk chk(Integer i);
   case (i)
@@ -123,16 +164,16 @@ module mk{C}RegsTb{suffix}(Empty);
   {C}RegsIfc#({targs}) r <- mk{C}Regs({cfg});
 
   Reg#(Bit#(16)) step <- mkReg(0);
+  Reg#(Bit#(16)) rstp <- mkReg(0);
   Reg#(Bool)     bad  <- mkReg(False);
+  Reg#(Bool)     ph2  <- mkReg(False);
 
-  rule run;
+  rule run (!ph2);
     Integer i = 0;
     Bit#(16) n = step >> 2;
     Bit#(2)  ph = truncate(step);
     if (n >= fromInteger(nchk)) begin
-      if (bad) $display("FAILED");
-      else $display("PASS all %0d register checks", nchk);
-      $finish(bad ? 1 : 0);
+      ph2 <= True;
     end else begin
       Chk c = chk(0);
       for (Integer j = 0; j < nchk; j = j + 1)
@@ -166,6 +207,44 @@ module mk{C}RegsTb{suffix}(Empty);
         end
       endcase
       step <= step + 1;
+    end
+  endrule
+
+  // 置位单列一条规则：寄存器组是内联的，与总线写放同一条规则就是同时用
+  // CReg 的两个端口（G0004）。分开也更像真实形状——IP 自己的规则在置位，
+  // 总线同时在写清。
+  rule setRace (ph2 && rstp[0] == 0);
+    Bit#(16) n = rstp >> 1;
+{rsets}
+  endrule
+
+  // 第二段：硬件置位与软件写清同一拍。置位排在总线之前，若写回时不把
+  // 这一拍的置位 OR 回去，事件就被抹掉了——而 stickybit 的含义正是不会丢。
+  rule race (ph2);
+    Bit#(16) n = rstp >> 1;
+    Bit#(1)  p = truncate(rstp);
+    if (n >= fromInteger(nrace)) begin
+      if (bad) $display("FAILED");
+      else $display("PASS all %0d register checks and %0d set-vs-clear races",
+                    nchk, nrace);
+      $finish(bad ? 1 : 0);
+    end else begin
+      Rc c = rc(0);
+      for (Integer j = 0; j < nrace; j = j + 1)
+        if (n == fromInteger(j)) c = rc(j);
+      if (p == 0) begin
+        let _ <- r.regs.access(RegReq {{ addr: zeroExtend(c.off), write: True,
+                                        wdata: c.clr, wstrb: '1 }});
+      end else begin
+        let x <- r.regs.access(RegReq {{ addr: zeroExtend(c.off), write: False,
+                                        wdata: 0, wstrb: '1 }});
+        if ((x.rdata & c.msk) != c.msk) begin
+          $display("FAIL a hwset racing the clear at %0h was swallowed: %08h",
+                   c.off, x.rdata);
+          bad <= True;
+        end
+      end
+      rstp <= rstp + 1;
     end
   endrule
 endmodule

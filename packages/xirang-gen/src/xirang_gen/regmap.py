@@ -36,7 +36,7 @@ FIELD_KEYS = {"name", "bits", "width", "desc", "sw", "hw", "onwrite", "onread",
 # 读带副作用。硬件自旋锁只能这么做：取锁必须与读回同一拍完成，
 # 拆成「读一次再写一次」就有窗口，两个核会同时拿到锁。
 ONREAD = {"rset", "rclr"}
-REG_KEYS = {"name", "offset", "desc", "feature", "fields", "array", "width", "atomic"}
+REG_KEYS = {"name", "offset", "desc", "feature", "fields", "alias", "array", "width", "atomic"}
 ATOMIC = {"latch-on-low"}
 
 
@@ -146,7 +146,32 @@ def _rows(spec: dict, params: list[str], dw: int = 32) -> list[dict]:
         out.append({"name": r["name"], "offset": off, "desc": r.get("desc", ""),
                     "feat": r.get("feature"), "multi": multi, "fields": flds,
                     "arr": arr, "rw": int(rw) if rw else dw,
-                    "atomic": r.get("atomic")})
+                    "atomic": r.get("atomic"), "alias": r.get("alias")})
+
+    # 别名寄存器：同一份存储的第二个地址，只露列出来的那几个字段。
+    # sstatus 就是 mstatus 的掩码视图——它不该有自己的存储，否则两个地址
+    # 各写各的，软件看到的是两份互不相干的状态。
+    by = {x["name"]: x for x in out}
+    for x in out:
+        if not x["alias"]:
+            continue
+        tgt = by.get(x["alias"])
+        if tgt is None:
+            raise Bad(f"{x['name']} 的 alias 指向不存在的 {x['alias']}")
+        if tgt["alias"]:
+            raise Bad(f"{x['name']} 的 alias 指向另一个别名 {tgt['name']}")
+        if x["arr"] or tgt["arr"]:
+            raise Bad(f"{x['name']}: 本版的别名只支持标量寄存器")
+        tf = {f["name"]: f for f in tgt["fields"]}
+        for f in x["fields"]:
+            g = tf.get(f["name"])
+            if g is None:
+                raise Bad(f"{x['name']}.{f['name']} 在 {tgt['name']} 里没有"
+                          f"同名字段——别名只能露目标已有的字段")
+            if (f["hi"], f["lo"]) != (g["hi"], g["lo"]):
+                raise Bad(f"{x['name']}.{f['name']} 的位域与 {tgt['name']} "
+                          f"的不一致：{f['hi']}:{f['lo']} vs {g['hi']}:{g['lo']}"
+                          f"——同一份存储只能有一个位置")
     return out
 
 
@@ -203,6 +228,9 @@ def bsv(pkg: Pkg) -> str:
     L.append(f"interface {C}RegsIfc#({tparams});")
     L.append("  interface RegIf#(aw, dw) regs;")
     for reg in rs:
+        # 别名没有自己的存储，方法在目标那边已经有了
+        if reg["alias"]:
+            continue
         for f in reg["fields"]:
             s = _sig(reg, f)
             if reg["arr"]:
@@ -265,6 +293,8 @@ def bsv(pkg: Pkg) -> str:
     L += ["    provisos (" + ", ".join(prov) + ");", ""]
 
     for reg in rs:
+        if reg["alias"]:
+            continue
         for f in reg["fields"]:
             s = _sig(reg, f) + "_r"
             init = "0" if f["reset"] is None else str(f["reset"])
@@ -295,10 +325,14 @@ def bsv(pkg: Pkg) -> str:
             else:
                 L.append(f"  Reg#(Bit#({f['w']})) {s} <- mkReg({init});")
     for reg in rs:
+        if reg["alias"]:
+            continue
         if reg["atomic"] == "latch-on-low":
             # 读低半时把高半锁进影子，读高半返回影子——否则两次读之间计数器会走，读出撕裂值
             L.append(f"  Reg#(Bit#({dw_i})) {reg['name']}_shadow <- mkReg(0);")
     for reg in rs:
+        if reg["alias"]:
+            continue
         for f in reg["fields"]:
             s = _sig(reg, f)
             if f["swacc"]:
@@ -436,35 +470,44 @@ def bsv(pkg: Pkg) -> str:
             L += ["        end"]
         L += ["      end"]
     L += ["      case (off)"]
+    by_name = {x["name"]: x for x in rs}
     for reg in rs:
         if reg["arr"] or reg["rw"] > dw_i:
             continue
+        # 别名的读写落在目标的信号上，只露它列出来的那几个字段——
+        # 于是 sstatus 天然就是 mstatus 的掩码视图，不是第二份状态。
+        src = reg
+        if reg["alias"]:
+            tgt = by_name[reg["alias"]]
+            keep = {f["name"] for f in reg["fields"]}
+            src = {**tgt,
+                   "fields": [f for f in tgt["fields"] if f["name"] in keep]}
         body = []
-        if reg["multi"]:
+        if src["multi"]:
             # 先拼当前值、套完字节选通再切回各字段——逐字段套选通会算错，
             # 因为选通按字节给，字段边界不一定对齐字节。
-            body.append(f"Bit#(dw) cur = {read_expr(reg)};")
+            body.append(f"Bit#(dw) cur = {read_expr(src)};")
             body.append("Bit#(dw) nw = applyStrb(cur, wd, r.wstrb);")
             body.append("if (r.write) begin")
-            for f in reg["fields"]:
+            for f in src["fields"]:
                 if f["sw"] in ("rw", "w") and not f["vol"]:
-                    tgt = port(reg, f, 1)
-                    asn = f"{tgt} <= nw[{f['hi']}:{f['lo']}];"
+                    tgtp = port(src, f, 1)
+                    asn = f"{tgtp} <= nw[{f['hi']}:{f['lo']}];"
                     if f["feat"] and f["feat"] != reg["feat"]:
                         body.append(f"  if (cfg.{f['feat']}) {asn}")
                     else:
                         body.append(f"  {asn}")
                 if f["swmod"]:
-                    body.append(f"  {_sig(reg, f)}_mod.send();")
+                    body.append(f"  {_sig(src, f)}_mod.send();")
             body.append("end else begin")
             body.append("  rd = cur;")
-            for f in reg["fields"]:
+            for f in src["fields"]:
                 if f["swacc"]:
-                    body.append(f"  {_sig(reg, f)}_acc.send();")
+                    body.append(f"  {_sig(src, f)}_acc.send();")
             body.append("end")
         else:
-            f = reg["fields"][0]
-            wr = port(reg, f, 1)
+            f = src["fields"][0]
+            wr = port(src, f, 1)
             if f["woclr"]:
                 body = [f"if (r.write) {wr} <= {wr} & ~truncate(wd);",
                         f"else rd = zeroExtend({wr});"]
@@ -485,9 +528,9 @@ def bsv(pkg: Pkg) -> str:
             # wdt 的喂狗、i2c 的收发、emac 的收发长度全都收不到通知——
             # 硬件那一侧永远等不到「软件写过了」。
             if f["swmod"]:
-                body.append(f"if (r.write) {_sig(reg, f)}_mod.send();")
+                body.append(f"if (r.write) {_sig(src, f)}_mod.send();")
             if f["swacc"]:
-                body.append(f"if (!r.write) {_sig(reg, f)}_acc.send();")
+                body.append(f"if (!r.write) {_sig(src, f)}_acc.send();")
         arm = "\n               ".join(body)
         if reg["feat"]:
             L += [f"        {aw}'h{reg['offset']:0{hexw}X}: if (cfg.{reg['feat']}) begin",
@@ -500,6 +543,8 @@ def bsv(pkg: Pkg) -> str:
           "    endmethod", "  endinterface;", "", "  interface regs = rf;"]
 
     for reg in rs:
+        if reg["alias"]:
+            continue
         for f in reg["fields"]:
             s = _sig(reg, f)
             if reg["arr"]:

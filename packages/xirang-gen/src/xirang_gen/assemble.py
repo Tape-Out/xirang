@@ -16,6 +16,7 @@ from xirang_core.model import Resolved
 from xirang_gen.wrap import BUSES, sub_targs
 
 MANAGER = "RegManager"
+TARGET = "RegTarget"
 
 
 def _lit(v) -> str:
@@ -39,6 +40,13 @@ def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
     # 装配里接过的子接口不能再往顶层透传：一个 always_enabled 方法
     # 既被片内规则调、又从顶层露出去，就是两个调用方，冲突。
     wired = set()
+    # pipe 接掉的发起口不再进仲裁器：它已经被目标吃掉，真正上总线的是
+    # 目标自己的下游口。
+    piped = set()
+    for c in root.ip.get("pipe") or []:
+        bits = str(c.get("manager") or "").split(".")
+        if len(bits) == 2:
+            piped.add((bits[0], bits[1]))
     for c in root.ip.get("connect") or []:
         bits = str(c.get("to") or "").split(".")
         if len(bits) >= 2:
@@ -89,7 +97,11 @@ def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
 
         for s in e.get("pins") or []:
             if s["type"] == MANAGER:
-                mgrs.append(f"{inst.name}.{s['name']}")
+                if (inst.name, s["name"]) not in piped:
+                    mgrs.append(f"{inst.name}.{s['name']}")
+                continue
+            if s["type"] == TARGET:
+                # 会停顿的目标由 pipe 接，不往顶层透传
                 continue
             if (inst.name, s["name"]) in wired:
                 continue
@@ -105,6 +117,23 @@ def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
     # 装配清单的 connect 段里，这里只查名字、落成一条规则。名字认不出来就报错。
     wires = []
     names = {i.name for i in res.instances}
+    # 发起口接会停顿的目标：四个方法的握手，是 mkPipe 一个模块的事，
+    # 不是一条方法调用，所以跟 connect 分开写。
+    for n3, c in enumerate(root.ip.get("pipe") or []):
+        unknown = set(c) - {"manager", "target", "desc"}
+        if unknown:
+            raise Bad(f"pipe 第 {n3 + 1} 条有不认识的键 {sorted(unknown)}")
+        for k2 in ("manager", "target"):
+            if not c.get(k2):
+                raise Bad(f"pipe 第 {n3 + 1} 条没写 {k2}")
+            who2 = str(c[k2]).split(".")[0]
+            if who2 not in names:
+                raise Bad(f"pipe 的 {k2} 指向不存在的实例 {who2}")
+        if c.get("desc"):
+            wires.append(f"  // {c['desc']}")
+        wires.append(f"  Empty pipe{n3} <- mkPipe({c['manager']}, "
+                     f"{c['target']});")
+        wires.append("")
     for n2, c in enumerate(root.ip.get("connect") or []):
         unknown = set(c) - {"to", "args", "desc"}
         if unknown:

@@ -32,7 +32,7 @@ HW = {"rw", "r", "w", "na"}
 # 字段允许的键。不在表里的一律报错——静默忽略过三次，每次都生成出默默错了的硬件。
 FIELD_KEYS = {"name", "bits", "width", "desc", "sw", "hw", "onwrite", "onread",
               "hwset", "stickybit", "reset", "feature", "volatile", "swacc",
-              "swmod"}
+              "swmod", "wrdata"}
 # 读带副作用。硬件自旋锁只能这么做：取锁必须与读回同一拍完成，
 # 拆成「读一次再写一次」就有窗口，两个核会同时拿到锁。
 ONREAD = {"rset", "rclr"}
@@ -124,6 +124,10 @@ def _rows(spec: dict, params: list[str], dw: int = 32) -> list[dict]:
                 raise Bad(f"{r['name']}.{f['name']}: 本版 onwrite 只支持 woclr")
             if f.get("onread") is not None and f["onread"] not in ONREAD:
                 raise Bad(f"{r['name']}.{f['name']}: onread 只支持 {sorted(ONREAD)}")
+            if f.get("wrdata") and not f.get("swmod"):
+                raise Bad(f"{r['name']}.{f['name']}: wrdata 要跟 swmod 一起用——取写进来的值，总得先知道这一拍有没有写")
+            if f.get("wrdata") and f.get("sw") not in ("rw", "w"):
+                raise Bad(f"{r['name']}.{f['name']}: 软件写不进来的字段谈不上 wrdata")
             if f.get("onread") and f.get("volatile"):
                 raise Bad(f"{r['name']}.{f['name']}: volatile 字段没有存储，"
                           f"读它不可能有副作用")
@@ -141,6 +145,7 @@ def _rows(spec: dict, params: list[str], dw: int = 32) -> list[dict]:
                 "feat": f.get("feature") or r.get("feature"),
                 "vol": bool(f.get("volatile")),
                 "swacc": bool(f.get("swacc")), "swmod": bool(f.get("swmod")),
+                "wrdata": bool(f.get("wrdata")),
                 "onread": f.get("onread"),
             })
         out.append({"name": r["name"], "offset": off, "desc": r.get("desc", ""),
@@ -249,6 +254,8 @@ def bsv(pkg: Pkg) -> str:
                           f"   // 软件写过一次",
                           f"  (* always_ready *) method "
                           f"Bit#(TLog#(TAdd#({n}, 1))) {s}_wr_i;   // 写的是哪一个"]
+                if f["wrdata"]:
+                    L.append(f"  (* always_ready *) method Bit#({f['w']}) {s}_wr_val;   // 写进来的值")
                 if f["hw"] in ("r", "rw") and not f["vol"]:
                     L.append(f"  (* always_ready *) method Vector#({n}, Bit#({f['w']})) {s};")
                 if f["hw"] in ("w", "rw") and not f["vol"]:
@@ -267,6 +274,8 @@ def bsv(pkg: Pkg) -> str:
                 L.append(f"  (* always_ready *) method Bool {s}_rd;   // 软件读过一次")
             if f["swmod"]:
                 L.append(f"  (* always_ready *) method Bool {s}_wr;   // 软件写过一次")
+            if f["wrdata"]:
+                L.append(f"  (* always_ready *) method Bit#({f['w']}) {s}_wr_val;   // 写进来的值")
     L += ["endinterface", ""]
 
     cfgarg = f"#({C}RegsCfg cfg)" if feats else ""
@@ -345,6 +354,9 @@ def bsv(pkg: Pkg) -> str:
                 if reg["arr"]:
                     L.append(f"  Wire#(Bit#(TLog#(TAdd#({reg['arr']['count']}, 1))))"
                              f" {s}_mod_i <- mkDWire(0);")
+            # 一拍最多一次写，所以数组也只要一根线
+            if f["wrdata"]:
+                L.append(f"  Wire#(Bit#({f['w']})) {s}_mod_v <- mkDWire(0);")
     L.append("")
 
     def _fld_read(reg, f, ix=""):
@@ -424,6 +436,9 @@ def bsv(pkg: Pkg) -> str:
                 if g["swmod"]:
                     L.append(f"          {_sig(reg, g)}_mod.send();")
                     L.append(f"          {_sig(reg, g)}_mod_i <= truncate({nidx});")
+                if g["wrdata"]:
+                    L.append(f"          {_sig(reg, g)}_mod_v"
+                             f" <= nw[{g['hi']}:{g['lo']}];")
             L += ["        end else begin", "          rd = cur;"]
             for g in reg["fields"]:
                 if g["swacc"]:
@@ -449,8 +464,10 @@ def bsv(pkg: Pkg) -> str:
                       f" {_sig(reg, f)}_acc.send();{ix} end"]
             ix = f" {_sig(reg, f)}_mod_i <= truncate({nidx});" if reg["arr"] else ""
             if f["swmod"]:
+                v = (f" {_sig(reg, f)}_mod_v <= truncate(wd);"
+                     if f["wrdata"] else "")
                 L += [f"        if (r.write) begin"
-                      f" {_sig(reg, f)}_mod.send();{ix} end"]
+                      f" {_sig(reg, f)}_mod.send();{ix}{v} end"]
         else:
             hi = f"{tgt}[{reg['rw']-1}:{dw_i}]"
             lo = f"{tgt}[{dw_i-1}:0]"
@@ -561,6 +578,8 @@ def bsv(pkg: Pkg) -> str:
                 if f["swmod"]:
                     L += [f"  method Bool {s}_wr = {s}_mod;",
                           f"  method {s}_wr_i = {s}_mod_i;"]
+                if f["wrdata"]:
+                    L.append(f"  method Bit#({f['w']}) {s}_wr_val = {s}_mod_v;")
                 if f["hw"] in ("r", "rw") and not f["vol"]:
                     if dual(f):
                         L += [f"  method Vector#({n}, Bit#({f['w']})) {s};",
@@ -588,6 +607,8 @@ def bsv(pkg: Pkg) -> str:
                 L.append(f"  method Bool {s}_rd = {s}_acc;")
             if f["swmod"]:
                 L.append(f"  method Bool {s}_wr = {s}_mod;")
+            if f["wrdata"]:
+                L.append(f"  method Bit#({f['w']}) {s}_wr_val = {s}_mod_v;")
     L += ["endmodule", "", "endpackage"]
     return "\n".join(L) + "\n"
 

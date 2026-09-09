@@ -469,10 +469,18 @@ def _from_doc(doc, search) -> Resolved:
     pkgs = _load_all(res, search)
     for _, i in res.walk():
         p = pkgs.get(i.of)
-        if p and p.regmap:
-            if i.addr is None:
-                i.addr = int(str(p.regmap.get("base")), 0)
-            i.size = int(str(p.regmap.get("size")), 0)
+        if not (p and p.regmap):
+            continue
+        # 没有控制口的实例（核）不进地址图：它的 regmap 描述的是自己的 CSR
+        # 空间，跟片上地址空间无关。解析那一路一直这么判，导入这一路没判，
+        # 于是往返一圈核就多了个 0 地址——soc-mcu 补上核之后 V4 当场变红。
+        shape = ((p.ip.get("contract") or {}).get("ctrl") or {}).get(
+            "shape", "flat")
+        if shape == "none":
+            continue
+        if i.addr is None:
+            i.addr = int(str(p.regmap.get("base")), 0)
+        i.size = int(str(p.regmap.get("size")), 0)
     return res
 
 
@@ -508,7 +516,7 @@ def _digest(d: pathlib.Path) -> str:
     return h.hexdigest()[:16]
 
 
-def _unused_methods(pkg: Pkg, gen_dir: pathlib.Path) -> list[str]:
+def _unused_methods(pkg: Pkg, gen_file: pathlib.Path) -> list[str]:
     """寄存器接口暴露的方法，实现里得真的用到。
 
     只在清单里、实现里没人读的字段是最贵的错：不报错、不告警，面板还会
@@ -522,13 +530,23 @@ def _unused_methods(pkg: Pkg, gen_dir: pathlib.Path) -> list[str]:
         f.read_text(encoding="utf-8", errors="ignore")
         for f in sorted((pkg.root / "bsv").glob("*.bsv"))
         + sorted((pkg.root / "bsv").glob("*.bs")))
+    # 只看本包这一份。输出目录是跨包复用的，通配一扫就把上一个包留下的
+    # 寄存器组也算进来，报出一长串别人的方法。
+    if not gen_file.is_file():
+        raise Bad(f"{pkg.name} 有寄存器图，却没生成出 {gen_file.name}")
     out: list[str] = []
     names: list[str] = []
-    for g in sorted(gen_dir.glob("*Regs.bsv")):
-        ifc = g.read_text(encoding="utf-8").split("endinterface")[0]
-        for n in re.findall(r"method\s+\S+\s+(\w+)\s*[;(]", ifc):
-            if n != "regs" and n not in names:
-                names.append(n)
+    ifc = gen_file.read_text(encoding="utf-8").split("endinterface")[0]
+    # 返回类型里有空格的方法（Bit#(TLog#(TAdd#(contexts, 1))) 这种）不能用
+    # 「method 类型 名字」去套——原来的正则把它们整个漏掉，plic 的两个下标
+    # 方法于是从来没被查过。改成：method 之后第一个「标识符紧跟 ; 或 (」。
+    for line in ifc.splitlines():
+        m = re.search(r"\bmethod\b(.*)", line.split("//")[0])
+        if not m:
+            continue
+        g = re.search(r"(\w+)\s*[;(]", m.group(1))
+        if g and g.group(1) != "regs" and g.group(1) not in names:
+            names.append(g.group(1))
     declared = list((pkg.ip.get("test") or {}).get("unused") or [])
     bogus = [n for n in declared if n not in names]
     if bogus:
@@ -564,6 +582,46 @@ def _flat_param(pkg: Pkg) -> list[str]:
             f"{lo:,.2f} 到 {hi:,.2f}）——这个参数什么也没改变。"
             f"要么实现它，要么把它从清单里去掉"]
 
+def _uncosted(pkg: Pkg) -> list[str]:
+    """价目表压根没提到的旋钮：改它，预测纹丝不动。
+
+    平坦曲线那条判据只管「有曲线但曲线是平的」。更隐蔽的是**连曲线都没有**：
+    `plic` 的 contexts 从 1 调到 16，每个上下文都要多一组阈值、使能与仲裁，
+    而预测三次都是 6,028.96。叶子价目表承诺自己是上界，这种情况下它不是。
+
+    与 test.unused 一样双向成立：写进 test.noarea 的旋钮如果其实已经计价，
+    或者压根不存在，同样报错。
+    """
+    area = pkg.ip.get("area") or {}
+    if not area:
+        return []
+    covered = set(area.get("params") or {})
+    base = area.get("base") or {}
+    if base.get("per"):
+        covered.add(base["per"])
+    for n, ft in (pkg.ip.get("features") or {}).items():
+        a = ft.get("area") or {}
+        if a:
+            covered.add(n)
+            if a.get("per"):
+                covered.add(a["per"])
+    knobs = set(pkg.ip.get("params") or {}) | set(pkg.ip.get("features") or {})
+    declared = list((pkg.ip.get("test") or {}).get("noarea") or [])
+    out = []
+    bogus = [n for n in declared if n not in knobs]
+    if bogus:
+        out.append(f"test.noarea 提到清单里没有的旋钮 {sorted(bogus)}")
+    stale = [n for n in declared if n in covered]
+    if stale:
+        out.append(f"test.noarea 里这几个其实已经计价，删掉 {sorted(stale)}")
+    miss = sorted(knobs - covered - set(declared))
+    if miss:
+        out.append(f"价目表没提到这些旋钮 {miss}——改它们预测纹丝不动，"
+                   f"而叶子价目表说自己是上界。要么量一条曲线，"
+                   f"要么写进 ip.yaml 的 test.noarea 并说明为什么")
+    return out
+
+
 def cmd_test(args) -> int:
     """把一个 IP 在整张矩阵上验一遍：调度门禁、寄存器一致性、各仓自己的行为测试。"""
     index = _index(_search(args))
@@ -589,9 +647,9 @@ def cmd_test(args) -> int:
     has_bsv = (pkg.root / "bsv").is_dir()
     cap = pkg.name[:1].upper() + pkg.name[1:]
 
-    problems = _flat_param(pkg)
+    problems = _flat_param(pkg) + _uncosted(pkg)
     if pkg.regmap:
-        problems += _unused_methods(pkg, out / "bsv")
+        problems += _unused_methods(pkg, out / "bsv" / f"{cap}Regs.bsv")
     for q in problems:
         print(f"  {BOLD}✘{OFF} {q}")
     if problems:

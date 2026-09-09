@@ -1,4 +1,4 @@
-"""价目表：实测过的配置直接查表，没测过的按「基线 + 每特性」叠加。
+"""价目表：实测过的配置直接查表，没测过的按「基线 + 每参数 + 每特性」叠加。
 
 叠加不是白来的。gpio 全网格（6 个合法组合 × 4 个位宽）实测下来，特性之间会
 互相借用逻辑：irq+bidir 在 8 针处比两项相加**多** 9.57%，在 32 针处又少 4.68%，
@@ -64,9 +64,19 @@ def _term(spec: dict, vals) -> float:
 
 
 def measured(pkg: Pkg, vals) -> float | None:
-    """这套旋钮实测过吗。实测过就不必再猜，也不必抬余量。"""
+    """这套旋钮实测过吗。实测过就不必再猜，也不必抬余量。
+
+    每一行必须把旋钮写全。少写一个，那一行就把「那个旋钮取任意值」都认成
+    自己量过的点——plic 原来只写 sources，于是 16 个上下文的配置也被当成
+    2 个上下文那次实测，直接返回一个小了五倍的数，还不抬余量。
+    """
+    knobs = set(pkg.ip.get("params") or {}) | set(pkg.ip.get("features") or {})
     for row in (pkg.ip.get("area") or {}).get("measured", []) or []:
         at = row.get("at") or {}
+        miss = sorted(knobs - set(at))
+        if miss:
+            raise Bad(f"{pkg.name} 的实测点 {at} 没写全旋钮 {miss}——"
+                      f"少写一个就等于声称那个旋钮取什么值都是这个面积")
         if all(k in vals and vals[k].value == v for k, v in at.items()):
             return float(row["um2"])
     return None
@@ -92,6 +102,32 @@ def price(pkg: Pkg, vals, lift: bool = True) -> tuple[float, dict[str, float]]:
         raise Bad(f"{pkg.name} 没有价目表，面积算不出来——"
                   f"先跑一次 xirang build --neutral 把它量出来")
     total = _term(area.get("base"), vals)
+
+    # 第二个、第三个参数。基线曲线只沿一个旋钮走，别的参数各给一条**增量**
+    # 曲线：默认值处必须是 0，否则基线被算两次。没有这一段的时候，
+    # plic 的 contexts 从 1 调到 16 预测纹丝不动，而叶子价目表说自己是上界。
+    for pn, spec in (area.get("params") or {}).items():
+        if pn not in vals:
+            raise Bad(f"价目表引用了不存在的旋钮 {pn}")
+        pts = spec.get("points")
+        if not pts:
+            raise Bad(f"{pkg.name} 的 params.{pn} 得给一条 points 曲线")
+        # 参数的代价可以挂在某个特性上：mbox 的锁数只在自旋锁开着时算数，
+        # 关掉之后一把锁也不例化，曲线照加就高估三倍多。
+        gate = spec.get("when")
+        if gate is not None:
+            if gate not in (pkg.ip.get("features") or {}):
+                raise Bad(f"{pkg.name} 的 params.{pn}.when 挂了不存在的特性 {gate}")
+            if not vals[gate].value:
+                per_knob[pn] = 0.0
+                continue
+        dflt = ((pkg.ip.get("params") or {}).get(pn) or {}).get("default")
+        if dflt is not None and abs(_interp(pts, float(dflt))) > 1e-6:
+            raise Bad(f"{pkg.name} 的 params.{pn} 是增量曲线，"
+                      f"默认值 {dflt} 处必须为 0，否则基线被算两次")
+        cost = _interp(pts, float(vals[pn].value))
+        per_knob[pn] = cost
+        total += cost
 
     for fn, f in (pkg.ip.get("features") or {}).items():
         v = vals[fn].value

@@ -131,6 +131,17 @@ class Pkg:
             r = p.get("range")
             if r and not (r[0] <= p.get("default", r[0]) <= r[1]):
                 raise Bad(f"{self.path}: param {pn} 的默认值超出 range")
+        # area 的键也进白名单。顶层键早就查了（D121），里面这一层一直没查——
+        # 而写错一个键的后果跟写错 area 一样：整条价目静默失效。
+        a = ip.get("area") or {}
+        unknown = set(a) - {"base", "params", "margin", "model", "error",
+                            "measured", "corner", "assembly"}
+        if unknown:
+            raise Bad(f"{self.path}: area 有不认识的键 {sorted(unknown)}")
+        for pn in (a.get("params") or {}):
+            if pn not in params:
+                raise Bad(f"{self.path}: area.params 提到清单里没有的旋钮 {pn}")
+
         # regmap 里出现的 feature 必须在 ip.yaml 声明过
         if self.regmap:
             for reg in self.regmap.get("regs", []) or []:

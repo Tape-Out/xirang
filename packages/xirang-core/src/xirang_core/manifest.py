@@ -56,7 +56,7 @@ LANGS = {"bsv", "bh", "verilog", "sv", "vhdl", "chisel", "spinal"}
 # 「area」写成「areas」，价目表整个失效而没人知道。
 TOP_KEYS = {"name", "version", "spec", "kind", "lang", "identity", "contract",
             "params", "features", "constraints", "area", "emit", "deps",
-            "bus", "instances", "test", "__path__"}
+            "bus", "instances", "connect", "test", "__path__"}
 
 
 class Pkg:

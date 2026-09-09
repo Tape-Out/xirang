@@ -148,6 +148,10 @@ def price(pkg: Pkg, vals, lift: bool = True) -> tuple[float, dict[str, float]]:
     return total, per_knob
 
 
+# 装配层的偏差口径：由上面三个实测点定，留一点余头。超出就是模型该重看了。
+ASM_BAND = 0.20
+
+
 def annotate(res: Resolved, pkgs: dict[str, Pkg]) -> Resolved:
     """把面积填进每个实例，并逐层累加。"""
     def rec(insts: list[Instance]) -> float:
@@ -167,7 +171,11 @@ def annotate(res: Resolved, pkgs: dict[str, Pkg]) -> Resolved:
                if n != res.top and p.is_library
                and (p.ip.get("area") or {}).get("base"))
     # 装配不是各实例之和：综合会跨边界优化，独立综合时保住的端口在装配里被并掉，
-    # 而嵌套的握手又比独立边界贵。实测这个系数在 0.94 到 1.29 之间，取中并给双侧误差。
+    # 而嵌套的握手又比独立边界贵。实测这个系数在 0.94 到 1.29 之间，取中。
+    #
+    # 三个装配实测下来，预测都偏保守，幅度 13.59% / 14.53% / 18.51%
+    # （soc-mcu 无核那版 / soc-linux 128 字 / soc-mcu 有核 256 字）。
+    # 所以口径是「偏保守，但不超过 ASM_BAND」——两侧都查，见 cli 的 build。
     # 叶子的价目表仍是上界，装配这一层只是估计——两件事的承诺不同。
     fac = 1.0
     for p in pkgs.values():

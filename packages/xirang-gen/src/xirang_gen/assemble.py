@@ -36,6 +36,13 @@ def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
     hexw = (aw + 3) // 4
 
     imports, decls, devs, pins_if, pins_impl = [], [], [], [], []
+    # 装配里接过的子接口不能再往顶层透传：一个 always_enabled 方法
+    # 既被片内规则调、又从顶层露出去，就是两个调用方，冲突。
+    wired = set()
+    for c in root.ip.get("connect") or []:
+        bits = str(c.get("to") or "").split(".")
+        if len(bits) >= 2:
+            wired.add((bits[0], bits[1]))
     irq_if, irq_impl, mgrs = [], [], []
     seen = set()
     k = 0
@@ -84,6 +91,8 @@ def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
             if s["type"] == MANAGER:
                 mgrs.append(f"{inst.name}.{s['name']}")
                 continue
+            if (inst.name, s["name"]) in wired:
+                continue
             nm = f"{inst.name}_{s['name']}"
             pins_if.append(f"  interface {s['type']}"
                            f"{sub_targs(s, inst.values, p.name)} {nm};")
@@ -91,6 +100,37 @@ def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
 
     if not k:
         raise Bad(f"{res.top} 的地址图是空的——至少要有一个带控制口的实例")
+
+    # 片内连线。工具不认得信号的含义，只认「哪个实例的哪个方法」，路由写在
+    # 装配清单的 connect 段里，这里只查名字、落成一条规则。名字认不出来就报错。
+    wires = []
+    names = {i.name for i in res.instances}
+    for n2, c in enumerate(root.ip.get("connect") or []):
+        unknown = set(c) - {"to", "args", "desc"}
+        if unknown:
+            raise Bad(f"connect 第 {n2 + 1} 条有不认识的键 {sorted(unknown)}")
+        tgt = str(c.get("to") or "")
+        if not tgt:
+            raise Bad(f"connect 第 {n2 + 1} 条没写 to")
+        who = tgt.split(".")[0]
+        if who not in names:
+            raise Bad(f"connect 的 to 指向不存在的实例 {who}")
+        # 只有写成 实例.方法 或 实例[下标] 的才算引用，其余当字面量
+        # （接地就写 False，接常数就写数）。这样一来引用写错必报，
+        # 而字面量不必编进白名单。
+        for a in c.get("args") or []:
+            s2 = str(a)
+            if "." not in s2 and "[" not in s2:
+                continue
+            ref = s2.split(".")[0].split("[")[0].strip()
+            if ref not in names:
+                raise Bad(f"connect 的 args 提到不存在的实例 {ref}")
+        call = ", ".join(str(a) for a in (c.get("args") or []))
+        if c.get("desc"):
+            wires.append(f"  // {c['desc']}")
+        wires += [f"  rule wire{n2}_{who};",
+                  f"    {tgt}({call});",
+                  "  endrule", ""]
     n = len(res.instances)
     irq_if.append(f"  (* always_ready, result = \"irqs\" *) method Bit#({k}) irqs;")
     irq_impl.append(f"  method Bit#({k}) irqs = pack(irqsOf(devs));")
@@ -178,6 +218,8 @@ def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
         "",
         *fabric,
         "",
+        # 规则要在方法与子接口之前：BSV 规定它们必须在块末（P0032）
+        *wires,
         f"  interface bus = {'extbus.pins' if mgrs else 'sl'};",
         *pins_impl,
         *irq_impl,

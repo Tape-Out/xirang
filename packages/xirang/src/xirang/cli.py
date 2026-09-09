@@ -15,7 +15,7 @@ import sys
 
 import yaml
 
-from xirang_area.price import annotate, model_note, price, stale
+from xirang_area.price import ASM_BAND, annotate, model_note, price, stale
 from xirang_back.ecc import synth
 from xirang_back.sim import schedule, sim
 from xirang_back.export import to_core, to_kconfig, to_tar
@@ -445,9 +445,16 @@ def cmd_build(args) -> int:
         print("  综合未跑通", file=sys.stderr)
         return 1
     err = (got - res.area_um2) / got * 100 if got else 0
-    print(f"  实测面积 {got:,.2f} µm²   预测偏差 {err:+.2f}%"
-          f"   {'✔ 预测偏保守' if res.area_um2 >= got else '✘ 预测低于实测，模型作废'}")
-    return 0
+    # 两侧都查。装配层自称是「双侧估计」，只查一侧的话那句话没人管：
+    # 保守到两成开外，面板就没法用来比较配置了，那是它另一半用途。
+    if res.area_um2 < got:
+        verdict = "✘ 预测低于实测，模型作废"
+    elif abs(err) > ASM_BAND * 100:
+        verdict = f"✘ 保守过头，超出模型声明的 {ASM_BAND:.0%}"
+    else:
+        verdict = "✔ 预测偏保守，在口径之内"
+    print(f"  实测面积 {got:,.2f} µm²   预测偏差 {err:+.2f}%   {verdict}")
+    return 0 if res.area_um2 >= got and abs(err) <= ASM_BAND * 100 else 1
 
 
 def _from_doc(doc, search) -> Resolved:

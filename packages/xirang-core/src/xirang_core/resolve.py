@@ -138,9 +138,14 @@ def _find_pkg(name: str, search: list[pathlib.Path]) -> Pkg:
 def resolve(top: str, search: list[pathlib.Path],
             pdk: dict | None = None, cli: dict | None = None) -> Resolved:
     root = _find_pkg(top, search)
-    if not root.is_assembly:
-        raise Bad(f"{top} 没有 instances 段，不是装配")
     bus = root.ip.get("bus", "apb4")
+    if not root.is_assembly:
+        # 叶子当成「只有一个实例的装配」。不这么做，面板与四个导出对单个 IP
+        # 全都打不开——而第三方要的正是单个 IP，不是整颗 SoC。
+        # 叶子不进地址图（addr 留空）：它还没有被放到任何一张地址空间里。
+        vals = resolve_pkg(root, {}, f"{root.path} (default)", pdk, cli)
+        return Resolved(top=top, bus=bus,
+                        instances=[Instance(name=top, of=top, values=vals, bus=bus)])
 
     def _split(with_: dict, org: str) -> tuple[dict, dict]:
         """把 with 拆成「自己的」与「后代的」，两边都带上来源。

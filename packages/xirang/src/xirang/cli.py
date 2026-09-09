@@ -16,6 +16,7 @@ import sys
 import yaml
 
 from xirang_area.price import ASM_BAND, annotate, model_note, price, stale
+from xirang_area.recal import recal as do_recal, stamp as do_stamp
 from xirang_back.ecc import synth
 from xirang_back.sim import schedule, sim
 from xirang_back.export import to_core, to_kconfig, to_tar
@@ -378,17 +379,46 @@ def _build_leaf(args, pkg) -> int:
     return 0
 
 
+def cmd_recal(args) -> int:
+    """价目表回填：重测记着的每一种配置，再重算曲线。
+
+    改了生成器或 IP 源码之后价目表就失效了（`xirang lint` 会报）。这条命令是
+    组织级 CI 那一步的实现，本地也能跑。默认只看不写，`--apply` 才落盘。
+    """
+    idx = _index(_search(args))
+    if args.top not in idx:
+        raise Bad(f"找不到包 {args.top}")
+    pkg = idx[args.top]
+    print(f"{BOLD}{pkg.name}{OFF}  回填价目表"
+          f"{'' if args.apply else '（只看不写，加 --apply 才落盘）'}")
+    for line in do_recal(pkg, _search(args), args.apply):
+        if not line.startswith("{"):
+            print(f"  {line}")
+    if args.apply:
+        w = stale(idx[args.top].__class__(pkg.root))
+        print("  摘要已盖" if not w else f"  {w}")
+    return 0
+
+
 def cmd_build(args) -> int:
     search = _search(args)
-    if not args.config:
-        idx = _index(search)
-        if args.top in idx and not idx[args.top].is_assembly:
-            return _build_leaf(args, idx[args.top])
+    doc = None
     if args.config:
         doc = yaml.safe_load(pathlib.Path(args.config).read_text(encoding="utf-8"))
         if doc.get("xirang") != 1:
             raise Bad(f"{args.config} 不是 xirang 导出的配置")
         args.top = doc["top"]
+    # 叶子那条路两条入口共用。分开写过一次，结果是同一份配置直接 build 出
+    # `GpioBare.bsv`、按导出的配置 build 出 `GpioPkg.bsv`——V4 当场抓到。
+    idx = _index(search)
+    if args.top in idx and not idx[args.top].is_assembly:
+        if doc is not None:
+            one = (doc.get("instances") or [{}])[0]
+            args.set = list(args.set or []) + [
+                f"{k}={yaml.safe_dump(v).strip()}"
+                for k, v in (one.get("with") or {}).items()]
+        return _build_leaf(args, idx[args.top])
+    if args.config:
         res = _from_doc(doc, search)
         pkgs = _load_all(res, search)
         annotate(res, pkgs)
@@ -521,6 +551,52 @@ def _digest(d: pathlib.Path) -> str:
         h.update(f.name.encode())
         h.update(f.read_bytes())
     return h.hexdigest()[:16]
+
+
+def _dead_inputs(pkg: Pkg) -> list[str]:
+    """引脚驱进来的值，模块里得真的读。
+
+    `i2c` 的 `scl_in` 就这么躺着：接口上有、`always_enabled` 每拍都驱、
+    模块里一次也没读——于是时钟延展完全不认，而调度门禁与寄存器一致性
+    都查不出来。同一类的还有 `aclint` 那根没人接的 SSWI 出线。
+
+    判据很直接：`mkBypassWire` / `mkDWire` 声明出来的线，除了声明那一行
+    与写它的那一行之外，还得在别处出现过。
+
+    与 test.unused、test.noarea 一样双向成立：写进 test.deadread 的名字
+    如果其实已经被读了，同样报错——豁免名单不许留着过期的条目。
+    """
+    bsv = pkg.root / "bsv"
+    if not bsv.is_dir():
+        return []
+    out: list[str] = []
+    dead: list[str] = []
+    for f in sorted(bsv.glob("*.bsv")) + sorted(bsv.glob("*.bs")):
+        src = f.read_text(encoding="utf-8", errors="ignore")
+        for m in re.finditer(r"^\s*Wire#\([^;]*?\)\s+(\w+)\s*<-\s*mk(?:Bypass|D)Wire",
+                             src, re.M):
+            name = m.group(1)
+            uses = 0
+            for line in src.splitlines():
+                bare = line.split("//")[0]
+                if re.search(rf"\b{name}\b", bare) is None:
+                    continue
+                if re.search(rf"\b{name}\s*<-\s*mk", bare):
+                    continue          # 声明
+                if re.search(rf"\b{name}\s*(?:\._write\(|<=)", bare):
+                    continue          # 只是在写它
+                uses += 1
+            if uses == 0:
+                dead.append(name)
+    declared = list((pkg.ip.get("test") or {}).get("deadread") or [])
+    for name in dead:
+        if name not in declared:
+            out.append(f"{name} 只写不读——引脚驱进来了，逻辑里一次也没用过。"
+                       f"确实不需要就写进 ip.yaml 的 test.deadread 并说明理由")
+    stale = [x for x in declared if x not in dead]
+    if stale:
+        out.append(f"test.deadread 里这几个其实已经被读了，删掉 {sorted(stale)}")
+    return out
 
 
 def _unused_methods(pkg: Pkg, gen_file: pathlib.Path) -> list[str]:
@@ -694,7 +770,7 @@ def cmd_test(args) -> int:
     has_bsv = (pkg.root / "bsv").is_dir()
     cap = pkg.name[:1].upper() + pkg.name[1:]
 
-    problems = _flat_param(pkg) + _uncosted(pkg)
+    problems = _flat_param(pkg) + _uncosted(pkg) + _dead_inputs(pkg)
     if pkg.regmap:
         problems += _unused_methods(pkg, out / "bsv" / f"{cap}Regs.bsv")
     for q in problems:
@@ -859,6 +935,11 @@ def main(argv=None) -> int:
     ts.add_argument("--no-self", action="store_true", help="跳过各仓自己的行为测试")
     ts.add_argument("--clean", action="store_true", help="先清掉输出目录")
     ts.set_defaults(fn=cmd_test)
+
+    b = sub.add_parser("recal", help="重测价目表并回填")
+    b.add_argument("top")
+    b.add_argument("--apply", action="store_true", help="真的写回 ip.yaml")
+    b.set_defaults(fn=cmd_recal)
 
     b = sub.add_parser("build", help="生成并综合")
     common(b)

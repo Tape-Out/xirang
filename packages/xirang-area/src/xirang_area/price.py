@@ -165,7 +165,12 @@ def annotate(res: Resolved, pkgs: dict[str, Pkg]) -> Resolved:
         return s
 
     root = pkgs.get(res.top)
-    own = price(root, {})[0] if root and (root.ip.get("area") or {}).get("base") else 0.0
+    # 顶层自己的面积只有装配才另算。叶子做顶层时它就是那唯一的实例，
+    # 上面的 rec 已经按真实旋钮算过了；这里再算一次既重复计价，
+    # 又因为拿的是空旋钮表而直接报「价目表引用了不存在的旋钮」。
+    own = (price(root, {})[0]
+           if root and root.is_assembly and (root.ip.get("area") or {}).get("base")
+           else 0.0)
     # 库里的模块整颗芯片只例化一次（总线绑定器、交换网），所以按包记一次。
     own += sum(price(p, {})[0] for n, p in pkgs.items()
                if n != res.top and p.is_library

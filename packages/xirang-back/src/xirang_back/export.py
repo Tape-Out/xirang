@@ -34,8 +34,11 @@ def _describe(res: Resolved, top) -> str:
 
 def to_core(res: Resolved, pkgs, files: list[str]) -> str:
     top = pkgs[res.top]
+    # VLNV 补全：vendor 与 library 都空着的话，两个项目各导一份
+    # `::uart:0.1.0` 就在同一个核库里撞名。仍然完全是 CAPI2 的 schema。
+    lib = (top.ip.get("identity") or {}).get("category") or "ip"
     d = {
-        "name": f"::{res.top}:{top.ip['version']}",
+        "name": f"tapeout:{lib}:{res.top}:{top.ip['version']}",
         # 只放 CAPI2 认的键。上游对顶层未知键是**报错**不是忽略
         # （fusesoc 2.4.7 实测：must not contain {'xirang'} properties），
         # 而「别人的格式一律是导出目标」就意味着完全照他们的 schema 来。

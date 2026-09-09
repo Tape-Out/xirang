@@ -622,6 +622,46 @@ def _uncosted(pkg: Pkg) -> list[str]:
     return out
 
 
+def _asm_gate(args, index, pkg: Pkg) -> int:
+    """装配的调度门禁：默认那一点生成到 Verilog，看 G 编号。
+
+    矩阵不做——那是各实例矩阵的乘积，怎么取样才不爆炸还没想清楚。但默认
+    那一点必须过：`plic` 的完成规则单独综合时调度干净，接进 SoC 就与总线
+    方法首尾相接、被整条丢掉（G0021）。这一类只在装配一级才现形，而这条
+    命令原来见到装配直接拒收，于是只能等组织 CI 去撞。
+    """
+    out = pathlib.Path(args.out or "test").resolve()
+    if out.exists() and args.clean:
+        shutil.rmtree(out)
+    (out / "bsv").mkdir(parents=True, exist_ok=True)
+    (out / "sw").mkdir(parents=True, exist_ok=True)
+    res = resolve(pkg.name, _search(args), cli={})
+    pkgs = {n: index[n] for n in {i.of for _, i in res.walk()} if n in index}
+    pkgs |= index
+    for name in sorted({i.of for _, i in res.walk()}):
+        if pkgs[name].regmap:
+            gen_regmap(pkgs[name], out / "bsv", out / "sw")
+    top_mod = "".join(w.capitalize()
+                     for w in res.top.replace("-", "_").split("_"))
+    src = out / "bsv" / f"{top_mod}Pkg.bsv"
+    src.write_text(assemble(res, pkgs, top_mod), encoding="utf-8")
+    dirs = [str(out / "bsv")]
+    dirs += [str(q.root / "bsv") for q in index.values()
+             if (q.root / "bsv").exists()]
+    work = out / "b"
+    work.mkdir(parents=True, exist_ok=True)
+    print(f"{BOLD}{res.top}{OFF}  装配调度门禁（默认那一点）")
+    ok, hits, log = schedule(f"mk{top_mod}", src, ":".join(dirs) + ":+", work)
+    if ok:
+        print(f"  ✔ mk{top_mod}")
+        return 0
+    print(f"  {BOLD}✘{OFF} mk{top_mod}  "
+          f"{' '.join(hits) if hits else '编译失败'}")
+    for ln in log.splitlines():
+        if any(g in ln for g in hits) or ln.startswith("Error"):
+            print(f"      {ln.strip()}")
+    return 1
+
 def cmd_test(args) -> int:
     """把一个 IP 在整张矩阵上验一遍：调度门禁、寄存器一致性、各仓自己的行为测试。"""
     index = _index(_search(args))
@@ -631,7 +671,7 @@ def cmd_test(args) -> int:
     if pkg.is_library:
         raise Bad(f"{args.top} 是库包，没有旋钮，也就没有矩阵")
     if pkg.is_assembly:
-        raise Bad(f"{args.top} 是装配。装配的矩阵是各实例矩阵的乘积，本版不做")
+        return _asm_gate(args, index, pkg)
 
     out = pathlib.Path(args.out or "test").resolve()
     if out.exists() and args.clean:

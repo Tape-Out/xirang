@@ -296,6 +296,12 @@ def cmd_export(args) -> int:
         build = pathlib.Path(args.build or "build").resolve()
         files = sorted(f.name for f in (build / "rtl").glob("*.v")) \
             if (build / "rtl").is_dir() else []
+        # 空的 fileset 是一份没法用的 .core，而它长得像一份能用的。
+        # 「不许静默忽略」在这里就是：没有 Verilog 就说没有，
+        # 别照样吐一份出来让人以为能喂给 fusesoc。
+        if not files:
+            raise Bad(f"{build}/rtl 里没有 Verilog，导不出能用的 .core"
+                      f"——先跑一次不带 --no-synth 的 build")
         txt = to_core(res, pkgs, files)
     elif fmt == "kconfig":
         txt = to_kconfig(res, pkgs)

@@ -745,6 +745,36 @@ def _asm_gate(args, index, pkg: Pkg) -> int:
             print(f"      {ln.strip()}")
     return 1
 
+def _lib_test(args, index, pkg) -> int:
+    """库包的行为测试：没有旋钮就没有矩阵，`tb/*Tb.bsv` 直接编直接跑。
+
+    地址图、写选通合并、总线绑定器都住在库包里，错了会影响每一个 IP——
+    此前它们一条行为测试都没有，只做了类型检查。
+    """
+    tbs = sorted((pkg.root / "tb").glob("*Tb.bsv")) if (pkg.root / "tb").is_dir() else []
+    print(f"{BOLD}{pkg.name}{OFF}  库包，{len(tbs)} 份行为测试")
+    if not tbs:
+        print("  没有 tb/，只做类型检查")
+        return 0
+    out = pathlib.Path(args.out or "test").resolve()
+    if out.exists() and args.clean:
+        shutil.rmtree(out)
+    (out / "b").mkdir(parents=True, exist_ok=True)
+    srcs = [str(p.root / "bsv") for p in index.values()
+            if (p.root / "bsv").is_dir()]
+    fail = 0
+    for f in tbs:
+        top = "mk" + f.stem
+        path = ":".join([str(pkg.root / "tb")] + srcs + ["+"])
+        ok, log = sim(top, f, path, out / "b")
+        last = log.strip().splitlines()[-1] if log.strip() else "没有输出"
+        print(f"  {'✔' if ok else BOLD + '✘' + OFF} {top}  {last}")
+        if not ok:
+            fail += 1
+    print(f"\n{len(tbs)} 份，{fail} 份不过")
+    return 1 if fail else 0
+
+
 def cmd_test(args) -> int:
     """把一个 IP 在整张矩阵上验一遍：调度门禁、寄存器一致性、各仓自己的行为测试。"""
     index = _index(_search(args))
@@ -752,7 +782,7 @@ def cmd_test(args) -> int:
         raise Bad(f"找不到包 {args.top}")
     pkg = index[args.top]
     if pkg.is_library:
-        raise Bad(f"{args.top} 是库包，没有旋钮，也就没有矩阵")
+        return _lib_test(args, index, pkg)
     if pkg.is_assembly:
         return _asm_gate(args, index, pkg)
 

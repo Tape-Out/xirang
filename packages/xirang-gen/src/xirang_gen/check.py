@@ -96,3 +96,56 @@ def unused_methods(pkg: Pkg, gen_file: pathlib.Path) -> list[str]:
         out.append(f"寄存器图声明了、实现里没人用：{sorted(left)}"
                    f"——要么实现，要么写进 ip.yaml 的 test.unused 并说明为什么")
     return out
+
+def no_overlap(pkg: Pkg) -> list[str]:
+    """任何**合法配置**下都不许有两个寄存器占同一个地址。
+
+    数组的长度是旋钮，所以重叠只在某些取值下才出现，而生成的 BSV 是参数化的
+    （长度那一头写成 `valueOf(channels)`），生成时根本看不见具体地址。所以这条
+    按参数的**取值范围上限**算——证的是「没有一种合法配置会重叠」，比逐点检查强。
+
+    `timer` 就栽在这里：捕获数组从 0x30 起、步长 4，四路以内相安无事，**八路
+    压到 0x40 的 ista 上**，而默认矩阵里恰好有 channels=8 那一点，跑了几十次
+    都没人出声——软件读 capt[4] 读到的是中断状态，写 ista 清中断顺手改掉 capt[5]。
+    """
+    rm = pkg.regmap
+    if not rm:
+        return []
+    dw = int(((rm.get("contract") or {}).get("dw")) or 32)
+    word = max(dw // 8, 4)
+    params = pkg.ip.get("params") or {}
+
+    def most(count) -> int:
+        """这个长度最大能到多少。"""
+        if str(count).isdigit():
+            return int(count)
+        spec = params.get(str(count)) or {}
+        if rng := spec.get("range"):
+            return int(rng[1])
+        if (d := spec.get("default")) is not None:
+            return int(d)
+        return 1
+
+    taken: dict[int, str] = {}
+    out: list[str] = []
+    for r in rm.get("regs") or []:
+        arr = r.get("array") or {}
+        n = most(arr["count"]) if arr else 1
+        stride = int(arr.get("stride") or word)
+        width = int(r.get("width") or dw)
+        words = max(1, -(-width // dw))
+        for k in range(n):
+            for w in range(words):
+                at = int(r["offset"]) + k * stride + w * word
+                who = taken.get(at)
+                if who and who != r["name"]:
+                    out.append(
+                        f"{who} 与 {r['name']} 在 {at:#06x} 上重叠"
+                        f"——软件读到的会是另一个寄存器。"
+                        f"数组按参数范围的上限算，所以这在某个合法配置下就会发生")
+                    return out
+                taken[at] = r["name"]
+    size = rm.get("size")
+    if size is not None and taken and max(taken) >= int(size):
+        out.append(f"寄存器排到了 {max(taken):#06x}，超出声明的 size {int(size):#06x}")
+    return out

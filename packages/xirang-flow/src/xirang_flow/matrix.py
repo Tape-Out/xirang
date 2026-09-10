@@ -15,7 +15,7 @@ from xirang_back.sim import schedule, sim
 from xirang_core.manifest import Bad, Pkg
 from xirang_core.matrix import points
 from xirang_core.resolve import resolve_pkg
-from xirang_gen.check import dead_inputs, unused_methods
+from xirang_gen.check import dead_inputs, no_overlap, unused_methods
 from xirang_gen.regmap import generate as gen_regmap
 from xirang_gen.tb import regs_tb
 from xirang_gen.wrap import neutral
@@ -72,7 +72,8 @@ def run(pkg: Pkg, index: dict[str, Pkg], *, out: pathlib.Path,
     cap = pkg.name[:1].upper() + pkg.name[1:]
 
     rep = Matrix(name=pkg.name)
-    rep.problems = flat_param(pkg) + uncosted(pkg) + dead_inputs(pkg)
+    rep.problems = (flat_param(pkg) + uncosted(pkg) + dead_inputs(pkg)
+                    + no_overlap(pkg))
     if pkg.regmap:
         rep.problems += unused_methods(pkg, out / "bsv" / f"{cap}Regs.bsv")
     if rep.problems:

@@ -30,7 +30,7 @@ HW = {"rw", "r", "w", "na"}
 # 字段允许的键。不在表里的一律报错——静默忽略过三次，每次都生成出默默错了的硬件。
 FIELD_KEYS = {"name", "bits", "width", "desc", "sw", "hw", "onwrite", "onread",
               "hwset", "stickybit", "reset", "feature", "volatile", "swacc",
-              "swmod", "wrdata"}
+              "swmod", "wrdata", "hweach"}
 # 读带副作用。硬件自旋锁只能这么做：取锁必须与读回同一拍完成，
 # 拆成「读一次再写一次」就有窗口，两个核会同时拿到锁。
 ONREAD = {"rset", "rclr"}
@@ -148,6 +148,7 @@ def _rows(spec: dict, params: list[str], dw: int = 32) -> list[dict]:
                 "vol": bool(f.get("volatile")),
                 "swacc": bool(f.get("swacc")), "swmod": bool(f.get("swmod")),
                 "wrdata": bool(f.get("wrdata")),
+                "hweach": bool(f.get("hweach")),
                 "onread": f.get("onread"),
             })
         out.append({"name": r["name"], "offset": off, "desc": r.get("desc", ""),
@@ -272,10 +273,19 @@ def bsv(pkg: Pkg) -> str:
                 if f["hw"] in ("r", "rw") and not f["vol"]:
                     L.append(f"  (* always_ready *) method Vector#({n}, Bit#({f['w']})) {s};")
                 if f["hw"] in ("w", "rw") and not f["vol"]:
-                    # 数组的硬件写要带下标。timer 的捕获寄存器逼出了这一处：
-                    # 「数组 + 硬件写」两个键各自合法，组合却一直没实现。
-                    L.append(f"  (* always_ready *) method Action {s}_in("
-                             f"Bit#(TLog#(TAdd#({n}, 1))) i, Bit#({f['w']}) v);")
+                    # 数组的硬件写默认带下标——**一拍只写得了一个**，因为 Action
+                    # 方法在一条规则里只能调一次。这不是设计，是接口形状把 IP 封了顶：
+                    # timer 的四路捕获同拍来了两个边沿，编号大的那一路被静默丢掉。
+                    #
+                    # `hweach` 让每个元素各有写口，同拍写几个都行。按需开启：
+                    # 掩码向量每个元素要一个写口，`emac.frame` 那种上千字的缓冲开了
+                    # 会长出一片写端口，而它本来就是一拍一字。
+                    if f["hweach"]:
+                        L.append(f"  (* always_ready *) method Action {s}_in("
+                                 f"Vector#({n}, Maybe#(Bit#({f['w']}))) v);")
+                    else:
+                        L.append(f"  (* always_ready *) method Action {s}_in("
+                                 f"Bit#(TLog#(TAdd#({n}, 1))) i, Bit#({f['w']}) v);")
                 continue
             if f["hw"] in ("r", "rw") and not f["vol"]:
                 L.append(f"  (* always_ready *) method Bit#({f['w']}) {s};")
@@ -624,10 +634,18 @@ def bsv(pkg: Pkg) -> str:
                     else:
                         L.append(f"  method {s} = readVReg({s}_r);")
                 if f["hw"] in ("w", "rw") and not f["vol"]:
-                    L += [f"  method Action {s}_in("
-                          f"Bit#(TLog#(TAdd#({n}, 1))) i, Bit#({f['w']}) v);",
-                          f"    {el} <= v;",
-                          "  endmethod"]
+                    if f["hweach"]:
+                        L += [f"  method Action {s}_in("
+                              f"Vector#({n}, Maybe#(Bit#({f['w']}))) v);",
+                              f"    for (Integer i = 0; i < valueOf({n}); i = i + 1)",
+                              "      if (v[i] matches tagged Valid .x)",
+                              f"        {el} <= x;",
+                              "  endmethod"]
+                    else:
+                        L += [f"  method Action {s}_in("
+                              f"Bit#(TLog#(TAdd#({n}, 1))) i, Bit#({f['w']}) v);",
+                              f"    {el} <= v;",
+                              "  endmethod"]
                 continue
             if f["hw"] in ("r", "rw") and not f["vol"]:
                 L.append(f"  method Bit#({f['w']}) {s} = {port(reg, f, 0)};")

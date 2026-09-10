@@ -137,11 +137,10 @@ def price(pkg: Pkg, vals, lift: bool = True) -> tuple[float, dict[str, float]]:
         if dflt is not None and abs(_interp(pts, float(dflt), True)) > 1e-6:
             raise Bad(f"{pkg.name} 的 params.{pn} 是增量曲线，"
                       f"默认值 {dflt} 处必须为 0，否则基线被算两次")
+        # 增量为负不一定是错：旋钮取值低于默认值时，它相对默认配置本来就该是负的
+        # （plic 的 contexts 默认 2，取 1 就是 -2,636.48）。真正要挡的是格点之外
+        # 沿下降段外推出来的负数，那一条在 _interp 里挡掉了。
         cost = _interp(pts, float(vals[pn].value), True)
-        if cost < 0:
-            raise Bad(f"{pkg.name} 的 params.{pn} 在 {vals[pn].value} 处算出 "
-                      f"{cost:,.2f}——增量为负就是把这个旋钮算成省面积，"
-                      f"叶子价目表的上界承诺不成立")
         per_knob[pn] = cost
         total += cost
 
@@ -155,9 +154,6 @@ def price(pkg: Pkg, vals, lift: bool = True) -> tuple[float, dict[str, float]]:
             cost = _term(spec.get(v), vals, True) if isinstance(spec, dict) else 0.0
         else:
             cost = _term(spec, vals, True) if v else 0.0
-        if cost < 0:
-            raise Bad(f"{pkg.name} 的特性 {fn} 算出 {cost:,.2f}——增量为负就是把这个"
-                      f"特性算成省面积，叶子价目表的上界承诺不成立")
         per_knob[fn] = cost
         total += cost
 

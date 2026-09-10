@@ -2,9 +2,19 @@
 
 
 def first_err(log: str) -> str:
-    hits = (ln.strip() for ln in log.splitlines()
-            if "Error" in ln or "Warning" in ln)
-    return next(hits, "编译没过")[:160]
+    """挑一行给人看。**错优先于警告**，不管谁排在前面。
+
+    原来是「第一条含 Error 或 Warning 的行」，于是一条无害的警告排在前面就能把
+    真正的错整个挡住：`plic` 的 pending 加宽成两个字之后报的是组合环（G0032），
+    显示出来的却是「Field not defined: none」这句与失败毫无关系的警告，
+    照着它查半天查不到东西。
+    """
+    lines = [ln.strip() for ln in log.splitlines()]
+    for want in ("Error", "Warning"):
+        for ln in lines:
+            if want in ln:
+                return ln[:160]
+    return "编译没过"
 
 
 def tail(o: str) -> str:

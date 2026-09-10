@@ -500,11 +500,20 @@ def bsv(pkg: Pkg) -> str:
             lo = f"{tgt}[{dw_i-1}:0]"
             # 寄存器是字面宽度，总线是类型参数，边界上必须过渡
             wdn = f"Bit#({dw_i})' (truncate(wd))"
-            L += [f"        Bool isHi = ({sub} >= {dw_i//8});",
-                  "        if (r.write) begin",
-                  f"          if (isHi) {tgt} <= {{{wdn}, {lo}}};",
-                  f"          else      {tgt} <= {{{hi}, {wdn}}};",
-                  "        end else begin"]
+            # 比总线宽的寄存器要「读改写」：只写得了一半，另一半得读回来拼上。
+            # **但软件写不了的字段不能生成写路径**——原来无论 sw 是什么都生成，
+            # 于是 `sw: r` 的寄存器软件照样改得动；而 volatile 字段落在 DWire 上，
+            # 「读回另一半再写回去」当场就是组合环（G0032），plic 把 pending
+            # 加宽到两个字时撞出来的正是这一条。
+            wr_ok = f["sw"] in ("rw", "w")
+            L.append(f"        Bool isHi = ({sub} >= {dw_i//8});")
+            if wr_ok:
+                L += ["        if (r.write) begin",
+                      f"          if (isHi) {tgt} <= {{{wdn}, {lo}}};",
+                      f"          else      {tgt} <= {{{hi}, {wdn}}};",
+                      "        end else begin"]
+            else:
+                L.append("        if (!r.write) begin")
             if reg["atomic"] == "latch-on-low":
                 L += [f"          if (isHi) rd = zeroExtend({reg['name']}_shadow);",
                       f"          else begin rd = zeroExtend({lo});"

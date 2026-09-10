@@ -5,14 +5,45 @@
 接口是 `ecc status --json` 与 `ecc rpc serve`；面积仍只能从综合日志取。
 本版走命令行，把这条记在任务单里，等 ecc 出可导入形态或 RPC 文档再改。
 """
+import glob
 import os
 import pathlib
 import re
 import shutil
 import subprocess
 
-BSC_LIB = "/home/heke/tools/bsc-2026.01-ubuntu-26.04/lib/Verilog"
-PDK_ROOT = "/home/heke/.local/share/ecc/pdks/icsprout55/v1.10.102"
+# 工具的位置一律现找，不写死。写死的代价已经付过一次：CI 的面积回填从上线那天起
+# 就在 `pdk.root is not a directory: /home/heke/...` 上失败，而失败被 `|| true`
+# 吞掉，area 分支照样每次提交一个只有时间戳的空目录，流水线照样绿。
+# 顺序是「环境变量 -> 从 PATH 上的可执行文件反推 -> 认输并说清楚」。
+
+
+def _near(exe: str, rel: str = "") -> str | None:
+    """从 PATH 上的可执行文件反推它的安装树。`bin/x` 的上一级就是根。"""
+    if not (w := shutil.which(exe)):
+        return None
+    root = pathlib.Path(w).resolve().parent.parent
+    q = root / rel if rel else root
+    return str(q) if q.exists() else None
+
+
+def bsc_lib() -> str | None:
+    """bsc 的 Verilog 库模块目录。"""
+    return os.environ.get("XR_BSC_LIB") or _near("bsc", "lib/Verilog")
+
+
+def oss_cad() -> str | None:
+    """oss-cad-suite 的根，ecc 靠它找 yosys。"""
+    return os.environ.get("CHIPCOMPILER_OSS_CAD_DIR") or _near("yosys")
+
+
+def pdk_root() -> str | None:
+    """PDK 按版本各占一个目录，取版本号最大的那个。"""
+    if v := os.environ.get("XR_PDK_ROOT"):
+        return v
+    hits = sorted(glob.glob(os.path.expanduser(
+        "~/.local/share/ecc/pdks/*/v*")))
+    return hits[-1] if hits else None
 
 ECC_TOML = """[design]
 name = "{name}"
@@ -61,9 +92,11 @@ def bsv_to_verilog(out: pathlib.Path, top: str, src_dirs: list[str],
 
 def _pull_bsc_libs(rtl: pathlib.Path):
     """bsc 的库模块不落在 vdir，按实例名递归补齐。"""
-    lib = pathlib.Path(BSC_LIB)
-    if not lib.exists():
+    if (where := bsc_lib()) is None:
+        # 少了库模块，yosys 会在几分钟后报「找不到模块」，那时已经很难回溯到这里
+        print("找不到 bsc 的 Verilog 库：设 XR_BSC_LIB，或把 bsc 放进 PATH")
         return
+    lib = pathlib.Path(where)
     for _ in range(4):
         have = set()
         want = set()
@@ -89,13 +122,15 @@ def synth(out: pathlib.Path, top: str, name: str,
         return None
     _pull_bsc_libs(rtl)
     (rtl / "files.f").write_text("\n".join(sorted(p.name for p in rtl.glob("*.v"))) + "\n")
-    (out / "ecc.toml").write_text(ECC_TOML.format(name=name, top=top, pdk=PDK_ROOT))
+    if (pdk := pdk_root()) is None:
+        print("找不到 PDK：设 XR_PDK_ROOT，或让 ecc 装进 "
+              "~/.local/share/ecc/pdks/<名>/<版本>")
+        return None
+    (out / "ecc.toml").write_text(ECC_TOML.format(name=name, top=top, pdk=pdk))
 
     env = dict(os.environ)
-    env["CHIPCOMPILER_OSS_CAD_DIR"] = "/home/heke/tools/oss-cad-suite"
-    env["PATH"] = ("/home/heke/tools/bsc-2026.01-ubuntu-26.04/bin:"
-                   "/home/heke/tools/oss-cad-suite/bin:/home/heke/.local/bin:"
-                   + env.get("PATH", ""))
+    if (cad := oss_cad()) is not None:
+        env["CHIPCOMPILER_OSS_CAD_DIR"] = cad
     r = _run(["ecc", "run"], cwd=str(out), env=env)
     log = out / "runs" / "default" / "Synthesis_yosys" / "log" / "Synthesis.log"
     if not log.exists():

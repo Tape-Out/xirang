@@ -207,10 +207,22 @@ def _reprobe(pkg: Pkg, doc, area, probe, path, Y, apply: bool, say) -> list[str]
 
     b = area.get("base") or {}
     old = float(b.get("fixed", 0) or 0)
+    # `check: true` 的探针**只核对、不写回**。库包的价钱要覆盖的是绑定器在**真实
+    # 上下文**里的代价（包装层实测减中立顶层实测），而探针量的是它配一个桩、
+    # 孤立综合出来的代价——那是**下界**。两者差得远：本机实测 uart +85.40、
+    # gpio +71.96、wdt +96.04，而 rtc 是 **−242.20**（中立顶层要把整个 RegIf 引到
+    # 端口上，综合器动不了；包装之后藏起来反而能优化）。一个定值只能取上界，
+    # 探针的数拿来当价钱会让「预测不得低于实测」当场破功。
+    checking = bool(probe.get("check"))
     pct = f"  ({(um2 - old) / old * 100:+.2f}%)" if old else "  （新）"
-    line = f"probe {mod}  {old:,.2f} -> {um2:,.2f}{pct}"
+    verb = "核对" if checking else "回填"
+    line = f"probe {mod}（{verb}）  记的 {old:,.2f}   孤立实测 {um2:,.2f}{pct}"
     say(f"  {line}")
     log = [line]
+    if checking:
+        if um2 > old:
+            log.append(f"{pkg.name}: 孤立实测已经超过记着的价钱，上界不再成立，要重算")
+        return log
     if apply:
         b["fixed"] = round(um2, 2)
         with path.open("w", encoding="utf-8") as fh:

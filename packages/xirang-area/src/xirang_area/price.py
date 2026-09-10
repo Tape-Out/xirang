@@ -7,8 +7,6 @@
 
 装配那一层的承诺不同，见 annotate。
 """
-from __future__ import annotations
-
 from xirang_core.manifest import Bad, Pkg
 from xirang_core.model import Instance, Resolved
 

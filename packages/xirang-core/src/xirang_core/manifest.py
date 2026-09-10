@@ -1,6 +1,4 @@
 """读 ip.yaml 与 regmap.yaml，带行号。行号是 computed 面板第二问的答案来源。"""
-from __future__ import annotations
-
 import pathlib
 
 import yaml

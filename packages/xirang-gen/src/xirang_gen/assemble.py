@@ -9,8 +9,6 @@
 实例声明的 `RegManager` 子接口是**发起口**：核要取指与访存、DMA 要搬数据。
 它们不接到顶层，而是接进 `mkXbar` 与外部总线一起排队。
 """
-from __future__ import annotations
-
 from xirang_core.manifest import Bad, Pkg
 from xirang_core.model import Resolved
 from xirang_gen.wrap import BUSES, sub_targs
@@ -171,7 +169,6 @@ def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
         wires += [f"  rule wire{n2}_{who};",
                   f"    {tgt}({call});",
                   "  endrule", ""]
-    n = len(res.instances)
     ni = k + ks
     irq_if.append(f"  (* always_ready, result = \"irqs\" *) method Bit#({ni}) irqs;")
     if ks:
@@ -184,7 +181,6 @@ def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
     else:
         irq_impl.append(f"  method Bit#({ni}) irqs = pack(irqsOf(devs));")
 
-    ftype = "RegTarget" if ks else "RegIf"
     mkfab = (f"  RegTarget#({aw}, {dw}) fab <- mkFabricT(devs, slowv);" if ks
              else f"  RegIf#({aw}, {dw}) fab <- mkFabric(devs);")
     m = len(mgrs)
@@ -217,7 +213,7 @@ def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
                   f"  Reg#(Bit#(TLog#(TAdd#({m}, 1)))) turn <- mkReg(0);",
                   f"  Vector#({m}, Wire#(Bool)) gnt <- replicateM(mkDWire(False));",
                   f"  Vector#({m}, Wire#(RegRsp#({dw}))) mrsp <- replicateM(",
-                  f"      mkDWire(RegRsp {{ rdata: 0, err: False }}));",
+                  "      mkDWire(RegRsp { rdata: 0, err: False }));",
                   "",
                   "  rule arbitrate;",
                   f"    Vector#({m}, Bool) v = newVector;",
@@ -232,7 +228,7 @@ def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
             "    // 某个发起方于是一次也轮不到——而 turn 只在授予时前进，",
             "    // 结果是它举着手、仲裁每拍判空闲，谁也不动。",
             f"    for (Integer i = 0; i < {m}; i = i + 1) begin",
-            f"      Bit#(8) w8 = zeroExtend(turn) + fromInteger(i);",
+            "      Bit#(8) w8 = zeroExtend(turn) + fromInteger(i);",
             f"      if (w8 >= {m}) w8 = w8 - {m};",
             f"      Bit#(TLog#(TAdd#({m}, 1))) w = truncate(w8);",
             "      if (!any && v[w]) begin s = w; any = True; end",

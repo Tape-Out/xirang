@@ -4,8 +4,6 @@
 抄一份就多一处会漏改的地方。G0021 尤其要盯：bsc 只把「规则永不触发」
 报成警告，而它几乎总意味着某条隐式条件被提到了整条规则头上。
 """
-from __future__ import annotations
-
 import pathlib
 import re
 import subprocess

@@ -1,132 +1,36 @@
-[build-system]
-requires = ["setuptools>=64", "setuptools_scm>=7.1"]
-build-backend = "setuptools.build_meta"
-
+# 息壤的工作区。八个包同仓，改动的驱动力各不相同——分包的理由写在
+# packages/<包>/pyproject.toml 的 description 里，一句话一个。
 [project]
-name = "fusesoc"
-description = "Award-winnning package manager and build abstraction tool for HDL code"
-readme = "README.md"
-authors = [
-  {name = "Olof Kindgren", email = "olof@award-winning.me"},
-]
-maintainers = [
-  {name = "Olof Kindgren", email = "olof@award-winning.me"},
-]
+name = "xirang-dev"
+version = "0.1.0"
+description = "XiRang workspace root"
+requires-python = ">=3.14"
+dependencies = ["xirang"]
 
-keywords=["VHDL", "verilog", "hdl", "rtl", "synthesis", "FPGA", "simulation", "ASIC"]
+[dependency-groups]
+dev = ["ruff>=0.14"]
 
-classifiers = [
-  "Development Status :: 5 - Production/Stable",
-  "Topic :: Utilities",
-  "Topic :: Software Development :: Build Tools",
-  "License :: OSI Approved :: BSD License",
-]
-
-dynamic = ["version"]
-
-dependencies = [
-  "edalize>=0.4.1",
-  "pyparsing>=3.0.0",
-  "pyyaml>=6.0",
-  "pydantic>=2.13.3",
-  "simplesat>=0.9.1",
-  "fastjsonschema",
-  "argcomplete",
-]
-requires-python = ">=3.10, <4"
-
-[project.urls]
-Homepage = "https://fusesoc.net"
-Documentation = "https://fusesoc.readthedocs.io"
-Repository = "https://github.com/olofk/fusesoc"
-Issues = "https://github.com/olofk/fusesoc/issues"
-Changelog = "https://github.com/olofk/fusesoc/blob/main/NEWS"
-
-[tool.setuptools_scm]
-write_to = "fusesoc/version.py"
-
-[tool.setuptools.packages.find]
-include = [
-  "fusesoc",
-  "fusesoc.capi2",
-  "fusesoc.capi2.schema",
-  "fusesoc.provider",
-  "fusesoc.parser",
-  "fusesoc.filters",
-]
-
-[project.scripts]
-fusesoc = "fusesoc.main:main"
-
-[tool.pytest.ini_options]
-markers = [
-    "network: test requires network access.",
-]
-
-[tool.tox]
-legacy_tox_ini = """
-[tox]
-envlist = py3
-
-[testenv]
-deps = pytest
-commands = pytest
-"""
-
-[tool.ruff]
-line-length = 88
-indent-width = 4
-
-target-version = "py310"
-
-[tool.mypy]
-python_version = "3.10"
-mypy_path = "."
-namespace_packages = true
-explicit_package_bases = true
-check_untyped_defs = true
-enable_error_code = ["deprecated"]
-files = ["fusesoc/"]
-plugins = ["pydantic.mypy"]
-
-[[tool.mypy.overrides]]
-module = [
-  "yaml",
-  "okonomiyaki.*",
-  "fastjsonschema",
-  "argcomplete",
-  "simplesat.*",
-  "edalize.*",
-  "pyparsing",
-  "pydantic",
-  "pydantic_core",
-  "nanoid",
-  "fusesoc.version",
-]
-ignore_missing_imports = true
-
-[tool.ty.environment]
-python-version = "3.10"
-
-[tool.ty.src]
-include = ["fusesoc/"]
-
-# Deps without stubs
-# (edalize, argcomplete, yaml, okonomiyaki, simplesat, fastjsonschema)
-[[tool.ty.overrides]]
-include = [
-  "fusesoc/coremanager.py",
-  "fusesoc/filters/custom.py",
-  "fusesoc/filters/spdxgen.py",
-  "fusesoc/fusesoc.py",
-  "fusesoc/lockfile.py",
-  "fusesoc/main.py",
-  "fusesoc/parser/coreparser.py",
-  "fusesoc/signature.py",
-  "fusesoc/utils.py",
-  "fusesoc/vlnv.py",
-]
-rules.unresolved-import = "ignore"
+[tool.uv]
+package = false
 
 [tool.uv.workspace]
 members = ["packages/*"]
+
+[tool.uv.sources]
+xirang = { workspace = true }
+xirang-area = { workspace = true }
+xirang-back = { workspace = true }
+xirang-core = { workspace = true }
+xirang-flow = { workspace = true }
+xirang-gen = { workspace = true }
+xirang-out = { workspace = true }
+xirang-ws = { workspace = true }
+
+[tool.ruff]
+target-version = "py314"
+line-length = 92
+
+[tool.ruff.lint]
+# F 与 E9 是真错：未定义的名字、引用在赋值之前、语法错。
+# 「局部变量遮蔽同名导入」这个形状归 F823，正是让整条命令挂掉的那一类。
+select = ["F", "E9"]

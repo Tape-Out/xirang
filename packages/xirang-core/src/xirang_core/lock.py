@@ -9,8 +9,6 @@
 与 git submodule 的边界：`.gitmodules` 管「目录从哪来」，锁文件管「解析到哪个目录」。
 同一个依赖**不得同时**以 submodule 与 `git:` 出现——那才是两个真相源。
 """
-from __future__ import annotations
-
 import hashlib
 import pathlib
 import re

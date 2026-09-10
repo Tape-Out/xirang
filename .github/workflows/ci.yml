@@ -1,59 +1,32 @@
-name: CI
+name: ci
 
 on:
   push:
+    paths: ['packages/**', 'tests/**', 'pyproject.toml', '.github/workflows/ci.yml']
   pull_request:
-
-  # Run CI once a week even without code changes to ensure tests pass with updated dependencies.
-  schedule:
-    - cron: '0 0 * * 5'
-
-  # Allow triggering a CI run from the web UI.
   workflow_dispatch:
 
 jobs:
-  build-and-test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-        - { icon: 🐧, name: ubuntu-22.04 }
-        - { icon: 🍎, name: macos-latest }
-        # CI is currently broken on Windows
-        # https://github.com/olofk/fusesoc/issues/528
-        #- { icon: 🧊, name: windows-latest }
-        pyver:
-          - '3.10'
-          - '3.11'
-          - '3.12'
-          - '3.13'
-          - '3.14'
-        exclude:
-          #Fails because github can't find an arm64 image for Python 3.7???
-          - os: {name: macos-latest}
-            pyver: '3.7'
-          #Fails because one test expects a different output during an exception
-          - os: {name: macos-latest}
-            pyver: '3.8'
-    runs-on: ${{ matrix.os.name }}
-    name: ${{ matrix.os.icon }} ${{ matrix.os.name }} | ${{ matrix.pyver }}
+  check:
+    runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: '3.14'
 
-    - name: 🧰 Repository Checkout
-      uses: actions/checkout@v4
+      - name: 装起来
+        run: uv sync
 
-    - name: 🐍 Set up Python ${{ matrix.pyver }}
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.pyver }}
+      # F 与 E9 是真错：未定义的名字、引用在赋值之前、语法错。
+      # 「局部变量遮蔽同名导入」归 F823——那一条让整条命令挂过一次。
+      - name: 静态检查
+        run: uv run ruff check packages tests
 
-    - name: Display Python version
-      run: python -c "import sys; print(sys.version)"
+      - name: 结构
+        run: uv run python tests/test_structure.py
 
-    - name: 🛠️ Install Tox and any other packages
-      run: pip install tox tox-gh-actions
-
-    - name: 🚧 Build package and run tests with tox
-      # XXX: Remove `-e py3-ci` and rely on the settings in tox.ini as soon as
-      # https://github.com/ymyzk/tox-gh-actions/issues/44 is resolved.
-      run: tox -e py3-ci
+      - name: 命令面在
+        run: |
+          uv run xirang --help
+          uv run ran --help

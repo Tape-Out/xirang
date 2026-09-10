@@ -3,11 +3,11 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "xirang-gen"
+name = "xirang-out"
 version = "0.1.0"
-description = "XiRang xirang-gen"
+description = "XiRang projections: the model rendered into other people's formats"
 requires-python = ">=3.14"
-dependencies = ['xirang-core']
+dependencies = ['xirang-core', 'pyyaml']
 
 [tool.setuptools.packages.find]
 where = ["src"]

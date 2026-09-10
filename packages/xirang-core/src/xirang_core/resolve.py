@@ -7,8 +7,6 @@
 钩子不参与这里：它们只能往下游加产物，改不了取值。这条纪律不是洁癖，
 是面板的前提——值一旦可能来自某次探测，"谁定的"就答不了。
 """
-from __future__ import annotations
-
 import pathlib
 
 from .manifest import Bad, Pkg, where
@@ -97,7 +95,10 @@ def _apply_constraints(pkg: Pkg, knobs, vals):
 
 
 def resolve_pkg(pkg: Pkg, overrides: dict, override_origin: str,
-                pdk: dict | None = None, cli: dict | None = None) -> dict[str, Value]:
+                pdk: dict | None = None, cli: dict | None = None,
+                ws=None) -> dict[str, Value]:
+    """ws 只按鸭子类型收：要 knobs(包名) 与 origin(键)。core 不认识工作区那个包，
+    认识了层次就倒过来了。"""
     knobs = pkg.knobs()
     c = Cascade(knobs)
     # 1 bsv-default：本版由 ip.yaml 的 default 代表（结构仍由 BSV 类型权威）
@@ -109,7 +110,10 @@ def resolve_pkg(pkg: Pkg, overrides: dict, override_origin: str,
         c.offer("pdk", {k: v for k, v in pdk.items() if k in knobs},
                 lambda k: "pdk/ics55")
     # 3 ip-default 与 1 同源，本版合并
-    # 4 workspace：本版不做
+    # 4 workspace：这次流片自己的默认值。压得过 IP 的默认，压不过实例与命令行
+    if ws:
+        c.offer("workspace", ws.knobs(pkg.name),
+                lambda k: ws.origin(f"{pkg.name}.{k}"))
     # 5 instance
     c.offer("instance", overrides, lambda k: override_origin)
     # 6 cli
@@ -136,14 +140,15 @@ def _find_pkg(name: str, search: list[pathlib.Path]) -> Pkg:
 
 
 def resolve(top: str, search: list[pathlib.Path],
-            pdk: dict | None = None, cli: dict | None = None) -> Resolved:
+            pdk: dict | None = None, cli: dict | None = None,
+            ws=None) -> Resolved:
     root = _find_pkg(top, search)
     bus = root.ip.get("bus", "apb4")
     if not root.is_assembly:
         # 叶子当成「只有一个实例的装配」。不这么做，面板与四个导出对单个 IP
         # 全都打不开——而第三方要的正是单个 IP，不是整颗 SoC。
         # 叶子不进地址图（addr 留空）：它还没有被放到任何一张地址空间里。
-        vals = resolve_pkg(root, {}, f"{root.path} (default)", pdk, cli)
+        vals = resolve_pkg(root, {}, f"{root.path} (default)", pdk, cli, ws)
         return Resolved(top=top, bus=bus,
                         instances=[Instance(name=top, of=top, values=vals, bus=bus)])
 
@@ -177,7 +182,7 @@ def resolve(top: str, search: list[pathlib.Path],
             for k, v in anc_desc.items():
                 desc.setdefault(k, {}).update(v)
             own.update(anc_own)
-            vals = resolve_pkg(sub, own, origin, pdk, cli)
+            vals = resolve_pkg(sub, own, origin, pdk, cli, ws)
             # 没有控制口的实例（核）不进地址图。它的 regmap 描述的是自己的
             # CSR 空间，跟片上地址空间没有关系——照搬那个 base 会让两个核
             # 「重叠」在 0 地址上。

@@ -1,6 +1,4 @@
 """解析后的模型。整套工具只有这一份真相，面板与所有导出都是它的投影。"""
-from __future__ import annotations
-
 import dataclasses
 from typing import Any
 

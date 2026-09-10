@@ -16,8 +16,6 @@
 auto 派生出来的点若被约束判为不合法，跳过并说明；extra 里手写的点不合法
 就是错误——那是人写错了，不是派生的副产品。
 """
-from __future__ import annotations
-
 import itertools
 
 from .manifest import Bad, Pkg

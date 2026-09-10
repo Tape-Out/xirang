@@ -3,9 +3,9 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "xirang-gen"
+name = "xirang-ws"
 version = "0.1.0"
-description = "XiRang xirang-gen"
+description = "XiRang workspace: which packages exist, where they are, whether they are in sync"
 requires-python = ">=3.14"
 dependencies = ['xirang-core']
 

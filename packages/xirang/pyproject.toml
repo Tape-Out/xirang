@@ -6,8 +6,8 @@ build-backend = "setuptools.build_meta"
 name = "xirang"
 version = "0.1.0"
 description = "XiRang xirang"
-requires-python = ">=3.10"
-dependencies = ['xirang-core', 'xirang-gen', 'xirang-area', 'xirang-back', 'pyyaml']
+requires-python = ">=3.14"
+dependencies = ['xirang-core', 'xirang-gen', 'xirang-area', 'xirang-back', 'xirang-out', 'xirang-ws', 'xirang-flow', 'pyyaml']
 
 [tool.setuptools.packages.find]
 where = ["src"]

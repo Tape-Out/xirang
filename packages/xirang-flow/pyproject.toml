@@ -3,11 +3,11 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "xirang-gen"
+name = "xirang-flow"
 version = "0.1.0"
-description = "XiRang xirang-gen"
+description = "XiRang orchestration: build a leaf, gate an assembly, run a matrix"
 requires-python = ">=3.14"
-dependencies = ['xirang-core']
+dependencies = ['xirang-core', 'xirang-gen', 'xirang-area', 'xirang-back']
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -19,8 +19,6 @@
 写回用 ruamel 的往返模式。`safe_dump` 会把 `ip.yaml` 里的注释全抹掉，而那些
 注释正是「为什么这么定」的唯一去处（`test.deadread` 的理由就在里面）。
 """
-from __future__ import annotations
-
 import json
 import pathlib
 import re

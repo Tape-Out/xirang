@@ -6,8 +6,6 @@
 
 手写的话是 **IP 数 × 总线数** 份样板，正是立项时要消灭的那个矩阵。
 """
-from __future__ import annotations
-
 from xirang_core.manifest import Bad, Pkg
 
 # 每种总线：BSV 包名、引脚接口、绑定器、以及实现它的那个仓（面积记在那里）。

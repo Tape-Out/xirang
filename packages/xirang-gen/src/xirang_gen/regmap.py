@@ -5,8 +5,6 @@
 
 对拍结论（V1）：生成件与手写件时序结构 20/20 逐位一致，行为 5 配置 × 2 万拍零失配。
 """
-from __future__ import annotations
-
 import pathlib
 
 from xirang_core.manifest import Bad, Pkg

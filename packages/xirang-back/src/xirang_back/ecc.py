@@ -5,8 +5,6 @@
 接口是 `ecc status --json` 与 `ecc rpc serve`；面积仍只能从综合日志取。
 本版走命令行，把这条记在任务单里，等 ecc 出可导入形态或 RPC 文档再改。
 """
-from __future__ import annotations
-
 import os
 import pathlib
 import re

@@ -13,8 +13,6 @@
 
 不涉及 IP 的行为，只涉及寄存器组。行为归各仓自己的 tb。
 """
-from __future__ import annotations
-
 import copy
 
 from xirang_core.manifest import Bad, Pkg
@@ -107,7 +105,6 @@ def regs_tb(pkg: Pkg, vals, suffix: str = "") -> str:
                     f"ones: {dw}'h{want1:0{dw // 4}X}, "
                     f"zeros: {dw}'h{want0:0{dw // 4}X} }};   // {name}")
 
-    knobs = pkg.knobs()
     # Cfg 里只有寄存器图真的用到的特性——IP 的其它开关不在寄存器组的视野里
     used = sorted({f["feat"] for r in rs for f in r["fields"] if f["feat"]}
                   | {r["feat"] for r in rs if r["feat"]})

@@ -134,7 +134,8 @@ class Pkg:
             a = ip.get("area") or {}
             if a and set(a.get("base") or {}) - {"fixed"}:
                 raise Bad(f"{self.path}: 库包的 area 只能是定值——它没有旋钮可依")
-            if set(a) - {"base", "model", "error", "corner", "assembly"}:
+            if set(a) - {"base", "model", "error", "corner", "assembly",
+                         "probe"}:
                 raise Bad(f"{self.path}: 库包的 area 有不认识的键")
             return
         feats = ip.get("features", {}) or {}

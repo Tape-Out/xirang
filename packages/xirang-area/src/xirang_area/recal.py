@@ -84,6 +84,8 @@ def recal(pkg: Pkg, search: list[pathlib.Path], apply: bool,
     with path.open(encoding="utf-8") as fh:
         doc = Y.load(fh)
     area = doc.get("area") or {}
+    if probe := area.get("probe"):
+        return _reprobe(pkg, doc, area, probe, path, Y, apply, say)
     rows = area.get("measured") or []
     if not rows:
         return [f"{pkg.name} 没有实测行，不必回填"]
@@ -168,6 +170,49 @@ def recal(pkg: Pkg, search: list[pathlib.Path], apply: bool,
             pts[kv] = round(a1 - a0, 2)
 
     if apply:
+        with path.open("w", encoding="utf-8") as fh:
+            Y.dump(doc, fh)
+        stamp(pkg)
+        log.append(f"写回 {path}")
+    return log
+
+
+def _reprobe(pkg: Pkg, doc, area, probe, path, Y, apply: bool, say) -> list[str]:
+    """库包的价钱：照 `area.probe` 记下的配方重量一次。
+
+    库包没有旋钮，也就没有 `measured` 那张表，于是原来这一支直接返回「不必回填」——
+    **价钱量过一次就再没人能重现**，源码一改摘要过期，而没有任何命令能把它测回来。
+    配方记的是量它的模块与探针文件，探针把多态模块钉在一个具体位宽上。
+    """
+    from xirang_back import ecc
+
+    mod = probe.get("module")
+    src = pkg.root / probe.get("src", "tb/Probe.bsv")
+    if not mod or not src.exists():
+        raise Bad(f"{pkg.name} 的 area.probe 指的模块或文件不在：{mod} {src}")
+
+    d = pathlib.Path(tempfile.mkdtemp(prefix="xirang-probe-"))
+    try:
+        (d / "bsv").mkdir()
+        srcs = [str(pkg.root / "bsv")]
+        for dep in (doc.get("deps") or {}):
+            q = pkg.root.parent / dep / "bsv"
+            if q.is_dir():
+                srcs.append(str(q))
+        um2 = ecc.synth(d, mod, pkg.name, extra_src=srcs, top_src=src)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    if um2 is None:
+        raise Bad(f"{pkg.name} 的探针量不出来——见上面的日志")
+
+    b = area.get("base") or {}
+    old = float(b.get("fixed", 0) or 0)
+    pct = f"  ({(um2 - old) / old * 100:+.2f}%)" if old else "  （新）"
+    line = f"probe {mod}  {old:,.2f} -> {um2:,.2f}{pct}"
+    say(f"  {line}")
+    log = [line]
+    if apply:
+        b["fixed"] = round(um2, 2)
         with path.open("w", encoding="utf-8") as fh:
             Y.dump(doc, fh)
         stamp(pkg)

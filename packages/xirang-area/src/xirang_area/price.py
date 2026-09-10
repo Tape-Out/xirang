@@ -241,7 +241,6 @@ def stale(pkg: Pkg) -> str | None:
     if now is None:
         return None       # 既没有寄存器图也没有源码，没什么可摘要的
     got = c.get("gen_digest")
-    now = gen_digest(pkg)
     if got is None:
         return f"{pkg.name} 的价目表没记生成产物摘要，无法判断是否失效"
     if str(got) != now:

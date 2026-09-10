@@ -9,6 +9,7 @@ import sys
 
 import yaml
 
+from xirang_area import check as area_check
 from xirang_area.price import ASM_BAND, annotate, model_note, stale
 from xirang_area.recal import recal as do_recal
 from xirang_back.ecc import synth
@@ -130,6 +131,7 @@ def cmd_lint(args) -> int:
     top = _top_pkg(args, index)
     resolved = resolve_deps(top, index)
     problems = check_submodules(search[0], resolved)
+    problems += area_check.outdated(top)
     lockf = top.root / "xirang.lock"
     if not lockf.exists():
         lockf = search[0] / "xirang.lock"

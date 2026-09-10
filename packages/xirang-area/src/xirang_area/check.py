@@ -1,6 +1,20 @@
-"""价目表自己的门禁：曲线平坦、旋钮没计价。只读 ip.yaml，不碰源码。
+"""价目表自己的门禁：已失效、曲线平坦、旋钮没计价。
 """
 from xirang_core.manifest import Pkg
+from xirang_area.price import stale
+
+
+def outdated(pkg: Pkg) -> list[str]:
+    """价目表是对着另一份生成产物量的。
+
+    判据本身早就写好了，只是**没有任何命令调用它**：叶子 IP 改了 BSV、自己的门禁
+    全绿、价目表当场失效而无人出声，要等别人 lint 一颗装配时才由锁的摘要间接照出来。
+    这与「声明了没人实现」是同一形状——存在的检查不调用，比没有这条检查更糟，
+    因为读代码的人会以为它在把关。
+
+    这条要跑一次生成器（几百毫秒），所以摆在 lint 里而不是每次解析都做。
+    """
+    return [m] if (m := stale(pkg)) else []
 
 
 def flat_param(pkg: Pkg) -> list[str]:

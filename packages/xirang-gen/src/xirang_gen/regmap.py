@@ -502,6 +502,20 @@ def bsv(pkg: Pkg) -> str:
             else:
                 L += [f"          rd = isHi ? zeroExtend({hi}) : zeroExtend({lo});"]
             L += ["        end"]
+            # 比总线宽的寄存器此前根本不发 swacc/swmod：清单里写了、接口上有、
+            # 恒为 False——「声明了没人实现」的另一种形态，而且这一种连门禁都
+            # 看不出来，因为方法确实存在。写哪一半都算「软件写过这个寄存器」：
+            # 「写了就重新武装」这类用法不在乎是哪一半。
+            ixa = f" {_sig(reg, f)}_acc_i <= truncate({nidx});" if reg["arr"] else ""
+            if f["swacc"]:
+                L += [f"        if (!r.write) begin"
+                      f" {_sig(reg, f)}_acc.send();{ixa} end"]
+            ixm = f" {_sig(reg, f)}_mod_i <= truncate({nidx});" if reg["arr"] else ""
+            if f["swmod"]:
+                v = (f" {_sig(reg, f)}_mod_v <= truncate(wd);"
+                     if f["wrdata"] else "")
+                L += [f"        if (r.write) begin"
+                      f" {_sig(reg, f)}_mod.send();{ixm}{v} end"]
         L += ["      end"]
     L += ["      case (off)"]
     by_name = {x["name"]: x for x in rs}

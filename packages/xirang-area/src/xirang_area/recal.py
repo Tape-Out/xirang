@@ -124,6 +124,19 @@ def recal(pkg: Pkg, search: list[pathlib.Path], apply: bool,
                 raise Bad(f"{pkg.name} 的 base[{kv}] 找不到对应实测行")
             log.append(f"base[{kv}] -> {v:,.2f}")
             b["points"][kv] = v
+    elif "fixed" in b:
+        # 基线不随任何旋钮走的包：量「特性全关、参数取默认」那一点。
+        # 没有这一支的时候，这类包的基线永远停在第一次手工填的数上。
+        cfg = dict(allo)
+        for pn, ps in (doc.get("params") or {}).items():
+            if (ps or {}).get("default") is not None:
+                cfg[pn] = ps["default"]
+        v = look(cfg)
+        if v is None:
+            raise Bad(f"{pkg.name} 的 base 找不到对应实测行"
+                      f"（要有一行是特性全关、参数取默认）")
+        log.append(f"base -> {v:,.2f}")
+        b["fixed"] = round(v, 2)
 
     for f, spec in featdoc.items():
         fa = (spec or {}).get("area") or {}

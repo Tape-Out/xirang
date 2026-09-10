@@ -14,7 +14,7 @@ from xirang_core.manifest import Bad, Pkg
 # 加一种总线是往这张表加一行。
 BUSES = {
     "apb4": {"pkg": "Apb4", "pins": "Apb4SlavePins", "bind": "mkApb4Bind",
-             "manifest": "amba"},
+             "bindt": "mkApb4BindT", "manifest": "amba"},
 }
 
 
@@ -74,7 +74,14 @@ def _shape(pkg: Pkg, vals):
         "cap": pkg.name[:1].upper() + pkg.name[1:],
         "tag": "_".join(nums) if nums else "0",
         "subs": b.get("pins") or [],
-        "ctrl_name": b.get("ctrl", "regs"),
+        # 控制口按特性选：`slow_when` 那个特性开着就走会停顿的那个口。
+        # 中立顶层是「独立流片的样子」，同步存储的样子就是会停顿的那个口。
+        "ctrl_name": (b["ctrl_slow"]
+                      if b.get("ctrl_slow") and vals[b["slow_when"]].value
+                      else b.get("ctrl", "regs")),
+        "ctrl_type": ("RegTarget"
+                      if b.get("ctrl_slow") and vals[b["slow_when"]].value
+                      else "RegIf"),
         "irqs": [(i["name"], i.get("width"))
                  for i in (pkg.ip.get("contract") or {}).get("irq", []) or []],
     }
@@ -108,7 +115,8 @@ def wrap(pkg: Pkg, vals) -> str:
         f"  {b['interface']}#({s['targs']}) m <- {b['module']}"
         f"({b['config_type']} {{ {s['feats']} }});",
         f"  {bus['pins']}#({s['aw']}, {s['dw']}) sl <- "
-        f"{bus['bind']}(m.{s['ctrl_name']});",
+        f"{bus['bindt' if s['ctrl_type'] == 'RegTarget' else 'bind']}"
+        f"(m.{s['ctrl_name']});",
         "",
         "  interface bus = sl;",
     ]
@@ -155,7 +163,8 @@ def neutral(pkg: Pkg, vals, suffix: str = "") -> str:
             .get("shape") == "none")
     ifc = [f"interface {cap}Bare{suffix}Ifc;"]
     if not none:
-        ifc.append(f"  interface RegIf#({s['aw']}, {s['dw']}) {s['ctrl_name']};")
+        ifc.append(f"  interface {s['ctrl_type']}#({s['aw']}, {s['dw']}) "
+                   f"{s['ctrl_name']};")
     ifc += [f"  interface {x['type']}{sub_targs(x, vals, pkg.name)} {x['name']};"
             for x in s["subs"]]
     ifc += [f"  (* always_ready *) method {irq_type(w, vals)} {n};"

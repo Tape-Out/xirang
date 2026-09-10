@@ -57,7 +57,9 @@ def _resolve(args) -> tuple[Resolved, dict[str, Pkg]]:
     res = resolve(args.top, search, cli=cli)
     pkgs = _load_all(res, search)
     annotate(res, pkgs)
-    for name in sorted({i.of for _, i in res.walk()}):
+    # 库包也要查。原来只查作为实例出现的包，于是 hwcore 与 amba 改了源码
+    # 也没人报警——而它们是全库踩着的那一层，改一行影响每一个 IP。
+    for name in sorted(pkgs):
         w = stale(pkgs[name])
         if w:
             print(f"\033[33m警告\033[0m {w}", file=sys.stderr)

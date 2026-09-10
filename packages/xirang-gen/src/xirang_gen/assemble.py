@@ -37,6 +37,9 @@ def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
     hexw = (aw + 3) // 4
 
     imports, decls, devs, pins_if, pins_impl = [], [], [], [], []
+    # 会停顿的设备走另一条向量。中断号照实例次序单记一份：设备分了两条向量，
+    # 位号就不能再靠 devs 的下标了。
+    slows, irqs = [], []
     # 装配里接过的子接口不能再往顶层透传：一个 always_enabled 方法
     # 既被片内规则调、又从顶层露出去，就是两个调用方，冲突。
     wired = set()
@@ -51,9 +54,9 @@ def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
         bits = str(c.get("to") or "").split(".")
         if len(bits) >= 2:
             wired.add((bits[0], bits[1]))
-    irq_if, irq_impl, mgrs = [], [], []
+    irq_if, irq_impl, irq_decl, mgrs = [], [], [], []
     seen = set()
-    k = 0
+    k = ks = 0
 
     for inst in res.instances:
         p = pkgs[inst.of]
@@ -90,10 +93,18 @@ def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
                 one = f"tagged Valid ({inst.name}.{ip_irqs[0]['name']} != 0)"
             else:
                 one = f"tagged Valid {inst.name}.{ip_irqs[0]['name']}"
-            devs.append(f"  devs[{k}] = device({aw}'h{inst.addr:0{hexw}X}, "
-                        f"{aw}'h{span:0{hexw}X}, "
-                        f"narrow({inst.name}.{e.get('ctrl', 'regs')}), {one});")
-            k += 1
+            irqs.append("False" if not ip_irqs else one[len("tagged Valid "):])
+            cs, sw = e.get("ctrl_slow"), e.get("slow_when")
+            if cs and sw and inst.values[sw].value:
+                slows.append(f"  slowv[{ks}] = slowDevice({aw}'h{inst.addr:0{hexw}X}, "
+                             f"{aw}'h{span:0{hexw}X}, "
+                             f"narrowT({inst.name}.{cs}), {one});")
+                ks += 1
+            else:
+                devs.append(f"  devs[{k}] = device({aw}'h{inst.addr:0{hexw}X}, "
+                            f"{aw}'h{span:0{hexw}X}, "
+                            f"narrow({inst.name}.{e.get('ctrl', 'regs')}), {one});")
+                k += 1
 
         for s in e.get("pins") or []:
             if s["type"] == MANAGER:
@@ -110,7 +121,7 @@ def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
                            f"{sub_targs(s, inst.values, p.name)} {nm};")
             pins_impl.append(f"  interface {nm} = {inst.name}.{s['name']};")
 
-    if not k:
+    if not k + ks:
         raise Bad(f"{res.top} 的地址图是空的——至少要有一个带控制口的实例")
 
     # 片内连线。工具不认得信号的含义，只认「哪个实例的哪个方法」，路由写在
@@ -161,11 +172,33 @@ def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
                   f"    {tgt}({call});",
                   "  endrule", ""]
     n = len(res.instances)
-    irq_if.append(f"  (* always_ready, result = \"irqs\" *) method Bit#({k}) irqs;")
-    irq_impl.append(f"  method Bit#({k}) irqs = pack(irqsOf(devs));")
+    ni = k + ks
+    irq_if.append(f"  (* always_ready, result = \"irqs\" *) method Bit#({ni}) irqs;")
+    if ks:
+        # 设备分两条向量之后 irqsOf 只看得见一半，位号改由实例次序直接铺开。
+        # 没有慢设备时仍走原式：一处等价改写会让全库装配的价目表统统作废。
+        # 这几行是语句不是子接口，得排在规则之前（P0032）。
+        irq_decl.append(f"  Vector#({ni}, Bool) irqv = newVector;")
+        irq_decl += [f"  irqv[{i}] = {x};" for i, x in enumerate(irqs)]
+        irq_impl.append(f"  method Bit#({ni}) irqs = pack(irqv);")
+    else:
+        irq_impl.append(f"  method Bit#({ni}) irqs = pack(irqsOf(devs));")
 
+    ftype = "RegTarget" if ks else "RegIf"
+    mkfab = (f"  RegTarget#({aw}, {dw}) fab <- mkFabricT(devs, slowv);" if ks
+             else f"  RegIf#({aw}, {dw}) fab <- mkFabric(devs);")
     m = len(mgrs)
-    if m:
+    if m and ks:
+        # 会停顿的织体：仲裁住在 hwcore 的 mkArb 里，不在这里铺开。
+        # 生成的顶层里不该有四十行自有 RTL——那既没人测，也违背「零自有 RTL」。
+        mgrs.append("extbus.mgr")
+        m += 1
+        fabric = [mkfab,
+                  f"  Apb4Manager#({aw}, {dw}) extbus <- mkApb4Manager;",
+                  f"  Vector#({m}, RegManager#({aw}, {dw})) mgrs = newVector;"]
+        fabric += [f"  mgrs[{i2}] = {g};" for i2, g in enumerate(mgrs)]
+        fabric += ["  Empty arb <- mkArb(mgrs, fab);"]
+    elif m:
         # 不造仲裁器：外部总线的绑定器与仲裁规则都调 fab.access，而一个动作方法
         # 一拍只能被调一次——**调度器**天然保证了互斥，外部口优先、片内发起方
         # 捡它不用的拍。片内之间的公平由 turn 轮转，固定优先级会让 DMA 一忙
@@ -179,7 +212,7 @@ def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
         # 外部口于是变成第 m 个发起方，与片内的一视同仁。
         mgrs.append("extbus.mgr")
         m += 1
-        fabric = [f"  RegIf#({aw}, {dw}) fab <- mkFabric(devs);",
+        fabric = [mkfab,
                   f"  Apb4Manager#({aw}, {dw}) extbus <- mkApb4Manager;",
                   f"  Reg#(Bit#(TLog#(TAdd#({m}, 1)))) turn <- mkReg(0);",
                   f"  Vector#({m}, Wire#(Bool)) gnt <- replicateM(mkDWire(False));",
@@ -221,8 +254,10 @@ def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
                        f"    {g}.resp(gnt[{i2}], mrsp[{i2}]);"]
         fabric.append("  endrule")
     else:
-        fabric = [f"  RegIf#({aw}, {dw}) fab <- mkFabric(devs);",
-                  f"  {bus['pins']}#({aw}, {dw}) sl <- {bus['bind']}(fab);"]
+        # 片上只有这一个发起方，慢织体可以直接接到 PREADY 上，不必再排一次队
+        b2 = bus["bindt"] if ks else bus["bind"]
+        fabric = [mkfab,
+                  f"  {bus['pins']}#({aw}, {dw}) sl <- {b2}(fab);"]
 
     L = [
         f"package {top_module}Pkg;",
@@ -249,9 +284,13 @@ def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
         "",
         f"  Vector#({k}, Device#({aw}, {dw})) devs = newVector;",
         *devs,
+        *([f"  Vector#({ks}, SlowDevice#({aw}, {dw})) slowv = newVector;"] + slows
+          if ks else []),
         "",
         *fabric,
         "",
+        *irq_decl,
+        *([""] if irq_decl else []),
         # 规则要在方法与子接口之前：BSV 规定它们必须在块末（P0032）
         *wires,
         f"  interface bus = {'extbus.pins' if mgrs else 'sl'};",

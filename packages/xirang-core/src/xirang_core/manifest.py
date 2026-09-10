@@ -164,10 +164,18 @@ class Pkg:
                     raise Bad(f"{self.path}: emit 的 bsv 段缺 {missing}——"
                               f"装配器要靠它生成 import 与例化")
                 extra = set(e) - {"kind", "package", "module", "config_type",
-                                  "interface", "ctrl", "pins"}
+                                  "interface", "ctrl", "pins",
+                                  "ctrl_slow", "slow_when"}
                 if extra:
                     raise Bad(f"{self.path}: emit 的 bsv 段有不认识的键 "
                               f"{sorted(extra)}——写错的键会被默默忽略")
+                # 会停顿的控制口要说清「哪个特性开着时用它」，否则没法选
+                if ("ctrl_slow" in e) != ("slow_when" in e):
+                    raise Bad(f"{self.path}: emit 的 ctrl_slow 与 slow_when 要成对出现"
+                              f"——只给一个，选口的条件就没了")
+                if "slow_when" in e and e["slow_when"] not in (self.ip.get("features") or {}):
+                    raise Bad(f"{self.path}: emit.slow_when 指的 {e['slow_when']!r} "
+                              f"不是这个包的特性")
                 for s in e.get("pins") or []:
                     miss = [k for k in ("name", "type") if k not in s]
                     if miss:

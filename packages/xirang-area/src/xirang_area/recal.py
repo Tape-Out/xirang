@@ -162,8 +162,36 @@ def recal(pkg: Pkg, search: list[pathlib.Path], apply: bool,
     return log
 
 
+def toolchain() -> str:
+    """量这一次用的是哪几版工具。
+
+    价目表的口径记了 tool / pdk / freq_mhz，唯独没记版本——换一版 yosys 数就变，
+    而摘要照旧说自己有效。这一轮只记不判：历史数据没有版本可比，先让新测的带上。
+    """
+    import shutil
+    import subprocess
+
+    # 每样工具只留版本号那一截。整行留着会把 git sha1 与编译日期也记进去，
+    # 那些一变数未必变，反而让「版本变了」这条将来的门禁天天误报。
+    probes = (("bsc", ["-v"], r"version ([^\s(]+)"),
+              ("yosys", ["-V"], r"Yosys (\S+)"),
+              ("ecc", ["--version"], r"(\d[\w.]*)"))
+    out = []
+    for name, args, pat in probes:
+        if not shutil.which(name):
+            continue
+        try:
+            r = subprocess.run([name, *args], capture_output=True, text=True,
+                               timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if m := re.search(pat, r.stdout + r.stderr):
+            out.append(f"{name} {m.group(1)}")
+    return " · ".join(out)
+
+
 def stamp(pkg: Pkg, date: str | None = None) -> bool:
-    """盖上新的产物摘要与日期。只改那两行文本，YAML 不重排。"""
+    """盖上新的产物摘要、日期与工具链版本。只改那几行文本，YAML 不重排。"""
     import datetime
 
     path = pkg.root / "ip.yaml"
@@ -174,6 +202,12 @@ def stamp(pkg: Pkg, date: str | None = None) -> bool:
     t = path.read_text(encoding="utf-8")
     t, n1 = re.subn(r"(gen_digest:\s*)sha256:[0-9a-f]+", rf"\g<1>{now}", t)
     t, n2 = re.subn(r"(\n    measured: )'[\d-]+'", rf"\g<1>'{day}'", t)
-    if n1 or n2:
+    n3 = 0
+    if tc := toolchain():
+        t, n3 = re.subn(r"\n    toolchain: .*", f"\n    toolchain: {tc}", t)
+        if not n3 and n2:
+            t, n3 = re.subn(r"(\n    measured: '[\d-]+')",
+                            rf"\g<1>\n    toolchain: {tc}", t)
+    if n1 or n2 or n3:
         path.write_text(t, encoding="utf-8")
-    return bool(n1 or n2)
+    return bool(n1 or n2 or n3)

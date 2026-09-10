@@ -13,6 +13,7 @@ from xirang_area.price import ASM_BAND, annotate, model_note, stale
 from xirang_area.recal import recal as do_recal
 from xirang_back.ecc import synth
 from xirang_out.export import to_core, to_kconfig, to_tar
+from xirang_out import kconf
 from xirang_out.doc import from_doc, to_doc
 from xirang_ws import find
 from xirang_ws import manifest as wsman
@@ -305,12 +306,21 @@ def cmd_recal(args) -> int:
 
 def cmd_build(args) -> int:
     search = find.roots(args.path)
-    doc = None
+    doc = kdot = None
     if args.config:
-        doc = yaml.safe_load(pathlib.Path(args.config).read_text(encoding="utf-8"))
-        if doc.get("xirang") != 1:
-            raise Bad(f"{args.config} 不是 xirang 导出的配置")
-        args.top = doc["top"]
+        txt = pathlib.Path(args.config).read_text(encoding="utf-8")
+        try:
+            d = yaml.safe_load(txt)
+        except yaml.YAMLError:
+            d = None
+        # 我们自己导出的那份带 xirang: 1；其余当作 menuconfig 存下来的 .config。
+        # 后者不带 top，所以 top 仍从命令行来。
+        if isinstance(d, dict) and d.get("xirang") == 1:
+            doc, args.top = d, d["top"]
+        elif "CONFIG_" in txt or txt.lstrip().startswith("#"):
+            kdot = args.config
+        else:
+            raise Bad(f"{args.config} 既不是 xirang 导出的配置，也不像 .config")
     # 叶子那条路两条入口共用。分开写过一次，结果是同一份配置直接 build 出
     # `GpioBare.bsv`、按导出的配置 build 出 `GpioPkg.bsv`——V4 当场抓到。
     idx = find.index(search)
@@ -320,6 +330,11 @@ def cmd_build(args) -> int:
             args.set = list(args.set or []) + [
                 f"{k}={yaml.safe_dump(v).strip()}"
                 for k, v in (one.get("with") or {}).items()]
+        elif kdot:
+            r0, p0 = _resolve(args)
+            args.set = list(args.set or []) + [
+                f"{k}={yaml.safe_dump(v.value).strip()}" for k, v
+                in kconf.read(kdot, r0, p0).instances[0].values.items()]
         over = {}
         for kv in args.set or []:
             k, _, v = kv.partition("=")
@@ -329,9 +344,14 @@ def cmd_build(args) -> int:
             out=pathlib.Path(args.out or "build").resolve(),
             overrides=over, bare=getattr(args, "neutral", False),
             synthesise=not args.no_synth, extra_src=args.bsv_path or []))
-    if args.config:
+    if doc is not None:
         res = from_doc(doc, find.load_all(search))
         pkgs = find.load_all(search)
+        annotate(res, pkgs)
+    elif kdot:
+        # 先按默认解析出整棵树，再把 .config 里改过的贴回去
+        res, pkgs = _resolve(args)
+        res = kconf.read(kdot, res, pkgs)
         annotate(res, pkgs)
     else:
         res, pkgs = _resolve(args)

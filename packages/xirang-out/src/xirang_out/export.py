@@ -14,6 +14,8 @@ import tarfile
 
 import yaml
 
+from collections.abc import Iterator
+
 from xirang_core.model import Instance, Resolved
 
 
@@ -54,6 +56,37 @@ def to_core(res: Resolved, pkgs, files: list[str]) -> str:
 
 # ---------------------------------------------------------------- kconfig
 
+def walk(res: Resolved, pkgs) -> "Iterator[tuple[tuple[str, ...], Instance, object, str]]":
+    """遍历装配层次，产出 (实例路径, 实例, 它的包, 符号前缀)。
+
+    去程与回程共用这一份：符号名不可逆解（下划线拼接、连字符也变下划线、还全大写），
+    所以回来的时候不解析名字，而是把去程再走一遍、边走边查表。
+    """
+    def rec(insts, path, prefix):
+        for i in insts:
+            here = (*path, i.name)
+            pre = _sym(prefix, i.name)
+            yield here, i, pkgs[i.of], pre
+            yield from rec(i.children, here, pre)
+    yield from rec(res.instances, (), "")
+
+
+def symtab(res: Resolved, pkgs) -> dict[str, tuple[tuple[str, ...], str, str]]:
+    """符号 -> (实例路径, 旋钮名, 取值)。choice 的每个候选各占一个符号，
+    最后一项就是它代表的取值；bool 与 int 的最后一项是空串。"""
+    out: dict[str, tuple[tuple[str, ...], str, str]] = {}
+    for path, inst, pkg, pre in walk(res, pkgs):
+        knobs = pkg.knobs()
+        for name in inst.values:
+            spec = knobs.get(name, {})
+            if spec.get("type") == "choice":
+                for val in spec["values"]:
+                    out[_sym(pre, name, val)] = (path, name, val)
+            else:
+                out[_sym(pre, name)] = (path, name, "")
+    return out
+
+
 def _knob_entries(inst: Instance, pkg, prefix: str) -> list[str]:
     L = []
     knobs = pkg.knobs()
@@ -62,23 +95,27 @@ def _knob_entries(inst: Instance, pkg, prefix: str) -> list[str]:
         sym = _sym(prefix, name)
         desc = spec.get("desc") or name
         if spec.get("type") == "bool":
-            L += [f'config {sym}', f'\tbool "{desc}"',
-                  f'\tdefault {"y" if v.value else "n"}']
+            L += [f'config {sym}', f'	bool "{desc}"',
+                  f'	default {"y" if v.value else "n"}']
             for dep in spec.get("depends", []) or []:
-                L.append(f"\tdepends on {_sym(prefix, dep)}")
+                L.append(f"	depends on {_sym(prefix, dep)}")
             if v.area_um2:
-                L.append(f'\thelp\n\t  Costs about {v.area_um2:.0f} um2 at this setting.')
+                # 一行一条，别在 f-string 里塞换行
+                L.append("	help")
+                L.append(f"	  Costs about {v.area_um2:.0f} um2 at this setting.")
         elif spec.get("type") == "choice":
-            L += ['choice', f'\tprompt "{desc}"']
+            # default 不能省：省了当前选的是哪一档就没导出去，往返一圈值必丢
+            L += ['choice', f'	prompt "{desc}"',
+                  f'	default {_sym(prefix, name, v.value)}']
             for val in spec["values"]:
-                L.append(f'\tconfig {_sym(prefix, name, val)}')
-                L.append(f'\t\tbool "{val}"')
+                L.append(f'	config {_sym(prefix, name, val)}')
+                L.append(f'		bool "{val}"')
             L.append("endchoice")
         else:
-            L += [f'config {sym}', f'\tint "{desc}"', f'\tdefault {v.value}']
+            L += [f'config {sym}', f'	int "{desc}"', f'	default {v.value}']
             r = spec.get("range")
             if r:
-                L.append(f"\trange {r[0]} {r[1]}")
+                L.append(f"	range {r[0]} {r[1]}")
         L.append("")
     return L
 

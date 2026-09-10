@@ -13,16 +13,25 @@ from xirang_core.manifest import Bad, Pkg
 from xirang_core.model import Instance, Resolved
 
 
-def _interp(points: dict, x: float) -> float:
-    """按实测点插值。落在点之间就线性插，落在两端之外就沿最近一段外推。
+def _interp(points: dict, x: float, delta: bool = False) -> float:
+    """按实测点插值。落在点之间就线性插，落在两端之外的规矩见下。
 
     存点而不是拟直线，是因为参数曲线可能有结构断点——uart 的 FIFO 在深度 3 以上
     换了实现，一条直线怎么拟都会把中间低估。
+
+    格点之外，两种曲线的规矩不同。绝对量的曲线有真实趋势，沿最近一段外推是对的，
+    但不许推到比那一侧最近的实测点还低。增量曲线（特性与参数的代价）在大规模上被
+    综合噪声主导，下降的尾巴不是趋势：`sram` 的 `sync` 四点量下来 1,030.96、
+    1,249.64、1,866.76、282.80，沿最后一段外推到 1024 字得 −2,885.12，一个要花钱的
+    特性成了省钱的，上界承诺当场作废。所以增量曲线出了格点一律取整条曲线的最大值。
     """
     xs = sorted(float(k) for k in points)
     ys = [float(points[k]) for k in sorted(points, key=lambda k: float(k))]
     if len(xs) == 1:
         return ys[0]
+    out = x < xs[0] or x > xs[-1]
+    if out and delta:
+        return max(ys)
     if x <= xs[0]:
         lo, hi = 0, 1
     elif x >= xs[-1]:
@@ -33,10 +42,13 @@ def _interp(points: dict, x: float) -> float:
     if xs[hi] == xs[lo]:
         return ys[lo]
     frac = (x - xs[lo]) / (xs[hi] - xs[lo])
-    return ys[lo] + frac * (ys[hi] - ys[lo])
+    y = ys[lo] + frac * (ys[hi] - ys[lo])
+    if out:
+        y = max(y, ys[0] if x < xs[0] else ys[-1])
+    return y
 
 
-def _term(spec: dict, vals) -> float:
+def _term(spec: dict, vals, delta: bool = False) -> float:
     """一条价目折算成面积。两种形态：
 
       {fixed, per, k}   仿射，用于特性叠加
@@ -50,7 +62,7 @@ def _term(spec: dict, vals) -> float:
             raise Bad("points 形态必须给 per，指明这条曲线沿哪个旋钮")
         if per not in vals:
             raise Bad(f"价目表引用了不存在的旋钮 {per}")
-        a = _interp(spec["points"], float(vals[per].value))
+        a = _interp(spec["points"], float(vals[per].value), delta)
         # 凹曲线的弦在曲线之下，点间插值系统性偏低（uart 实测最多低 3.54%）。
         # 按实测残差加一个余量，让「恒为高估」由构造保证，而不是碰运气。
         return a * (1.0 + float(spec.get("margin", 0.0)))
@@ -122,10 +134,14 @@ def price(pkg: Pkg, vals, lift: bool = True) -> tuple[float, dict[str, float]]:
                 per_knob[pn] = 0.0
                 continue
         dflt = ((pkg.ip.get("params") or {}).get(pn) or {}).get("default")
-        if dflt is not None and abs(_interp(pts, float(dflt))) > 1e-6:
+        if dflt is not None and abs(_interp(pts, float(dflt), True)) > 1e-6:
             raise Bad(f"{pkg.name} 的 params.{pn} 是增量曲线，"
                       f"默认值 {dflt} 处必须为 0，否则基线被算两次")
-        cost = _interp(pts, float(vals[pn].value))
+        cost = _interp(pts, float(vals[pn].value), True)
+        if cost < 0:
+            raise Bad(f"{pkg.name} 的 params.{pn} 在 {vals[pn].value} 处算出 "
+                      f"{cost:,.2f}——增量为负就是把这个旋钮算成省面积，"
+                      f"叶子价目表的上界承诺不成立")
         per_knob[pn] = cost
         total += cost
 
@@ -136,9 +152,12 @@ def price(pkg: Pkg, vals, lift: bool = True) -> tuple[float, dict[str, float]]:
             continue
         if f.get("type", "bool") == "choice":
             # choice 的价目按档位取
-            cost = _term(spec.get(v), vals) if isinstance(spec, dict) else 0.0
+            cost = _term(spec.get(v), vals, True) if isinstance(spec, dict) else 0.0
         else:
-            cost = _term(spec, vals) if v else 0.0
+            cost = _term(spec, vals, True) if v else 0.0
+        if cost < 0:
+            raise Bad(f"{pkg.name} 的特性 {fn} 算出 {cost:,.2f}——增量为负就是把这个"
+                      f"特性算成省面积，叶子价目表的上界承诺不成立")
         per_knob[fn] = cost
         total += cost
 

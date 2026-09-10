@@ -49,5 +49,10 @@ def main() -> int:
     return 1 if bad else 0
 
 
+# 直接跑是脚本，pytest 收的是这一个。少了它 pytest 会收到零个用例然后报绿，
+# 而那句绿什么也没验。
+def test_structure():
+    assert main() == 0
+
 if __name__ == "__main__":
     sys.exit(main())

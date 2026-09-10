@@ -50,6 +50,10 @@ CTRL_SHAPES = {"flat", "server", "none"}
 # 规范对源语言是开放的，实现目前只有 BSV 与 BH 两个前端。写成序列表示混用。
 LANGS = {"bsv", "bh", "verilog", "sv", "vhdl", "chisel", "spinal"}
 
+# 每种语言在树上长什么样。有了它，`lang` 才不只是一句自述。
+SRC_EXT = {"bsv": ".bsv", "bh": ".bs", "verilog": ".v", "sv": ".sv",
+           "vhdl": ".vhd", "chisel": ".scala", "spinal": ".scala"}
+
 # 顶层键的白名单。写错一个键就被默默忽略，比报错糟得多——
 # 「area」写成「areas」，价目表整个失效而没人知道。
 TOP_KEYS = {"name", "version", "spec", "kind", "lang", "identity", "contract",
@@ -82,15 +86,37 @@ class Pkg:
     def is_assembly(self) -> bool:
         return bool(self.ip.get("instances"))
 
+    def _check_lang(self, langs: list[str]):
+        """声明哪种语言就得真的写哪种。
+
+        `lang: bh` 配一棵全是 `.bsv` 的树，此前一路放行——**认识的键被默默忽略，
+        比不认识的键更难查**：读清单的人会照着去找 `.bs`，找不到才知道被骗。
+        """
+        src = self.root / "bsv"
+        if not src.is_dir():
+            return
+        want = {SRC_EXT[x] for x in langs if x in SRC_EXT}
+        have = {f.suffix for f in src.iterdir() if f.is_file()} & set(SRC_EXT.values())
+        if not have:
+            return
+        if extra := have - want:
+            raise Bad(f"{self.path}: lang 写的是 {langs}，树上却有 {sorted(extra)} "
+                      f"的源码——要么改 lang，要么改源码")
+        if miss := want - have:
+            raise Bad(f"{self.path}: lang 写的是 {langs}，树上一个 {sorted(miss)} "
+                      f"的源码都没有")
+
     def _check(self):
         ip = self.ip
         unknown = set(ip) - TOP_KEYS
         if unknown:
             raise Bad(f"{self.path}: 不认识的顶层键 {sorted(unknown)}")
         lang = ip.get("lang", "bsv")
-        bad = set(lang if isinstance(lang, list) else [lang]) - LANGS
+        langs = lang if isinstance(lang, list) else [lang]
+        bad = set(langs) - LANGS
         if bad:
             raise Bad(f"{self.path}: 不认识的 lang {sorted(bad)}")
+        self._check_lang(langs)
         for k in ("name", "version", "spec"):
             if k not in ip:
                 raise Bad(f"{self.path} 缺 {k}")

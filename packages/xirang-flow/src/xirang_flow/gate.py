@@ -14,6 +14,7 @@ from xirang_core.resolve import resolve
 from xirang_gen.assemble import assemble
 from xirang_gen.regmap import generate as gen_regmap
 
+from .logs import tail
 from .report import Gate, Lib, Mark, Row
 
 
@@ -80,9 +81,19 @@ def _self_tests(pkg: Pkg, out: pathlib.Path, dirs: list[str]) -> list[Row]:
     for f in sorted(dest.glob("*Tb.bsv")):
         top = "mk" + f.stem
         passed, log = sim(top, f, path, out / "sim")
-        last = log.strip().splitlines()[-1] if log.strip() else "没有输出"
-        rows.append(Row(label=top, mark=Mark.ok if passed else Mark.bad, note=last))
+        rows.append(Row(label=top, mark=Mark.ok if passed else Mark.bad, note=_note(passed, log)))
     return rows
+
+
+def _note(ok: bool, log: str) -> str:
+    """过了就取最后一行；没过先挑 FAIL、TIMEOUT、Error 那几行。
+
+    原来一律取最后一行，编译失败时那往往是半截源码（`soc-switch` 少 import 时
+    只显示了「Apb4::*;'」），看不出错在哪。
+    """
+    if ok:
+        return log.strip().splitlines()[-1] if log.strip() else "没有输出"
+    return tail(log)
 
 
 def library(pkg: Pkg, index: dict[str, Pkg], *,
@@ -105,6 +116,5 @@ def library(pkg: Pkg, index: dict[str, Pkg], *,
         top = "mk" + f.stem
         path = ":".join([str(tb), *srcs, "+"])
         ok, log = sim(top, f, path, out / "b")
-        last = log.strip().splitlines()[-1] if log.strip() else "没有输出"
-        rep.rows.append(Row(label=top, mark=Mark.ok if ok else Mark.bad, note=last))
+        rep.rows.append(Row(label=top, mark=Mark.ok if ok else Mark.bad, note=_note(ok, log)))
     return rep

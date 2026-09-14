@@ -39,6 +39,29 @@ def flat_param(pkg: Pkg) -> list[str]:
             f"要么实现它，要么把它从清单里去掉"]
 
 
+def unmeasured(pkg: Pkg) -> list[str]:
+    """标了价、却没有一行实测是它开着的特性。
+
+    `uncosted` 只看价目表提没提到这个旋钮，于是 `fixed: 0.0` 这种占位价也算计价。
+    `hart` 的 `mmu` 就这么过了门禁：两份 16 条的 CAM，价目表说它不要钱。
+    包里既然有实测行，每个标了价的特性就得有一行是它开着的，否则这个价没有来处。
+    """
+    area = pkg.ip.get("area") or {}
+    rows = area.get("measured") or []
+    if not rows:
+        return []
+    dflt = {k: (v or {}).get("default")
+            for sec in ("params", "features") for k, v in (pkg.ip.get(sec) or {}).items()}
+    out = []
+    for f, spec in (pkg.ip.get("features") or {}).items():
+        if not (spec or {}).get("area"):
+            continue
+        if not any({**dflt, **dict(r.get("at") or {})}.get(f) is True for r in rows):
+            out.append(f"特性 {f} 标了价，却没有一行实测是它开着的，价钱没有来处。"
+                       f"在 area.measured 里加上它开着的配置（um2 先写 0），再跑 recal")
+    return out
+
+
 def uncosted(pkg: Pkg) -> list[str]:
     """价目表压根没提到的旋钮：改它，预测纹丝不动。
 

@@ -142,6 +142,20 @@ def recal(pkg: Pkg, search: list[pathlib.Path], apply: bool,
 
     for f, spec in featdoc.items():
         fa = (spec or {}).get("area") or {}
+        if "fixed" in fa:
+            # 原来这一支直接跳过：定价的特性从不重算，价钱停在第一次手填的数上，
+            # 连占位的 0 也原样留着（hart 的 mmu）。取大不取新：手填的数可能是跨参数
+            # 取的上界（cache 的 stats 带三个参数），按默认参数量出的一点压不低它。
+            on, off = dict(allo, **deps_on(f)), dict(allo, **deps_on(f))
+            on[f] = True
+            a1, a0 = look(on), look(off)
+            if a1 is None or a0 is None:
+                raise Bad(f"{pkg.name} 的特性 {f} 缺实测行 {on if a1 is None else off}")
+            old, new = float(fa["fixed"] or 0), round(a1 - a0, 2)
+            fa["fixed"] = max(old, new)
+            keep = "" if new >= old else f"（记的 {old:,.2f} 更大，保留）"
+            log.append(f"feat {f} -> {new:,.2f}{keep}")
+            continue
         if not isinstance(fa.get("points"), dict):
             continue
         for kv in list(fa["points"]):

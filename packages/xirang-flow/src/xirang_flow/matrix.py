@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import sys
 
-from xirang_area.check import flat_param, uncosted
+from xirang_area.check import flat_param, uncosted, unmeasured
 from xirang_back.sim import schedule, sim
 from xirang_core.manifest import Bad, Pkg
 from xirang_core.matrix import points
@@ -72,7 +72,7 @@ def run(pkg: Pkg, index: dict[str, Pkg], *, out: pathlib.Path,
     cap = pkg.name[:1].upper() + pkg.name[1:]
 
     rep = Matrix(name=pkg.name)
-    rep.problems = (flat_param(pkg) + uncosted(pkg) + dead_inputs(pkg)
+    rep.problems = (flat_param(pkg) + uncosted(pkg) + unmeasured(pkg) + dead_inputs(pkg)
                     + no_overlap(pkg))
     if pkg.regmap:
         rep.problems += unused_methods(pkg, out / "bsv" / f"{cap}Regs.bsv")

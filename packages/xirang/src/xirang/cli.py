@@ -131,7 +131,7 @@ def cmd_lint(args) -> int:
     top = _top_pkg(args, index)
     resolved = resolve_deps(top, index)
     problems = check_submodules(search[0], resolved)
-    problems += area_check.outdated(top)
+    problems += area_check.outdated(top) + area_check.unmeasured(top)
     lockf = top.root / "xirang.lock"
     if not lockf.exists():
         lockf = search[0] / "xirang.lock"

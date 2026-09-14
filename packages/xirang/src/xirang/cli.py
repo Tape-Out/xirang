@@ -452,10 +452,13 @@ def cmd_test(args) -> int:
     if pkg.is_assembly:
         rep = gate.assembly(pkg, index, find.roots(args.path),
                             out=out, clean=args.clean)
-        print(f"{BOLD}{pkg.name}{OFF}  装配调度门禁（默认那一点）")
+        print(f"{BOLD}{pkg.name}{OFF}  装配调度门禁与自检（默认那一点）")
         if rep.ok:
             print(f"  ✔ {rep.top}")
-            return 0
+            for r in rep.rows:
+                print(f"  {r.mark if r.mark is Mark.ok else BOLD + r.mark + OFF}"
+                      f" {r.label}  {r.note}")
+            return rep.rc
         print(f"  {BOLD}✘{OFF} {rep.top}  "
               f"{' '.join(rep.hits) if rep.hits else '编译失败'}")
         for ln in rep.lines:

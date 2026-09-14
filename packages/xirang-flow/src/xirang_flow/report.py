@@ -52,10 +52,15 @@ class Gate:
     ok: bool
     hits: list[str] = field(default_factory=list)
     lines: list[str] = field(default_factory=list)
+    rows: list[Row] = field(default_factory=list)
+
+    @property
+    def failed(self) -> int:
+        return sum(r.mark is Mark.bad for r in self.rows)
 
     @property
     def rc(self) -> int:
-        return int(not self.ok)
+        return int(not self.ok or bool(self.failed))
 
 
 @dataclass(slots=True)

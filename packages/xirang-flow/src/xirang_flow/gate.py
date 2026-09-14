@@ -5,6 +5,8 @@
 """
 import pathlib
 import shutil
+import subprocess
+import sys
 
 from xirang_back.sim import schedule, sim
 from xirang_core.manifest import Pkg
@@ -50,7 +52,37 @@ def assembly(pkg: Pkg, index: dict[str, Pkg], roots: list[pathlib.Path], *,
     lines = [] if ok else [
         ln.strip() for ln in log.splitlines()
         if any(g in ln for g in hits) or ln.startswith("Error")]
-    return Gate(top=f"mk{top_mod}", ok=ok, hits=list(hits), lines=lines)
+    rows = _self_tests(pkg, out, dirs) if ok else []
+    return Gate(top=f"mk{top_mod}", ok=ok, hits=list(hits), lines=lines, rows=rows)
+
+
+def _self_tests(pkg: Pkg, out: pathlib.Path, dirs: list[str]) -> list[Row]:
+    """装配自带的测试台：先跑 `tb/mk*.py` 生成，再逐个编译运行。
+
+    组织流水线一直在跑这一步，本地 `ran test` 原来只到调度门禁为止，于是一处
+    只有自检看得见的错（比如核读错了自己的 hartid）本地全绿，要推上去才现形。
+    生成物写进测试输出目录，不碰包自己的 `tb/`。
+    """
+    tb = pkg.root / "tb"
+    gens = sorted(tb.glob("mk*.py")) if tb.is_dir() else []
+    if not gens:
+        return []
+    dest = out / "tb"
+    dest.mkdir(parents=True, exist_ok=True)
+    for g in gens:
+        r = subprocess.run([sys.executable, str(g), str(dest)], cwd=tb,
+                           capture_output=True, text=True, timeout=300)
+        if r.returncode:
+            tail = (r.stdout + r.stderr).strip().splitlines()
+            return [Row(label=g.name, mark=Mark.bad, note=tail[-1] if tail else "生成失败")]
+    path = ":".join([*dirs, str(dest), str(tb), "+"])
+    rows = []
+    for f in sorted(dest.glob("*Tb.bsv")):
+        top = "mk" + f.stem
+        passed, log = sim(top, f, path, out / "sim")
+        last = log.strip().splitlines()[-1] if log.strip() else "没有输出"
+        rows.append(Row(label=top, mark=Mark.ok if passed else Mark.bad, note=last))
+    return rows
 
 
 def library(pkg: Pkg, index: dict[str, Pkg], *,

@@ -236,6 +236,10 @@ def _reprobe(pkg: Pkg, doc, area, probe, path, Y, apply: bool, say) -> list[str]
     if checking:
         if um2 > old:
             log.append(f"{pkg.name}: 孤立实测已经超过记着的价钱，上界不再成立，要重算")
+        elif apply and stamp(pkg):
+            # 核对通过即对着当前源码重新确认了上界；摘要连 bsv/ 下的手写源码也算进去，
+            # 这里不盖，库包改了源码就再也盖不回去
+            log.append(f"核对通过，重盖摘要 {path}")
         return log
     if apply:
         b["fixed"] = round(um2, 2)

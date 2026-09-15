@@ -50,6 +50,9 @@ jobs:
       - name: 价目表重测超时整组杀
         run: uv run python tests/test_recalkill.py
 
+      - name: 标量单字段的 volatile 字段不让软件写线
+        run: uv run python tests/test_volscalar.py
+
       - name: 命令面在
         run: |
           uv run xirang --help

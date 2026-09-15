@@ -716,6 +716,10 @@ def bsv(pkg: Pkg) -> str:
                 body = [f"if (r.write) begin {nv} if (legal_{_sig(src, f)}(nv)) {wr} <= nv; end"]
                 if f["sw"] == "rw":
                     body.append(f"else rd = zeroExtend({wr});")
+            elif f["vol"] and f["sw"] in ("rw", "w"):
+                # volatile 字段没有存储，那根线归硬件的 _in 驱动；软件的写只发脉冲、交写进来的值，
+                # 不能再往线上写——与 _in 抢同一个 wset，总线访问会被每拍驱动的规则饿死（sdhci 的 PIO 口）
+                body = [f"if (!r.write) rd = zeroExtend({wr});"] if f["sw"] == "rw" else []
             elif f["sw"] == "rw":
                 body = [f"if (r.write) {wr} <= truncate("
                         f"applyStrb(zeroExtend({wr}), wd, r.wstrb)){sb};",

@@ -676,6 +676,9 @@ def bsv(pkg: Pkg) -> str:
                         body.append(f"  {asn}")
                 if f["swmod"]:
                     body.append(f"  {_sig(src, f)}_mod.send();")
+                # 标量这两条原来只发脉冲不交值，_wr_val 恒为零；数组那两条一直是对的
+                if f["wrdata"]:
+                    body.append(f"  {_sig(src, f)}_mod_v <= nw[{f['hi']}:{f['lo']}];")
             body.append("end else begin")
             body.append("  rd = cur;")
             for f in src["fields"]:
@@ -711,7 +714,10 @@ def bsv(pkg: Pkg) -> str:
             # 单字段寄存器也要发脉冲。之前只有多字段那一支发了，于是
             # wdt 的喂狗、i2c 的收发、emac 的收发长度全都收不到通知——
             # 硬件那一侧永远等不到「软件写过了」。
-            if f["swmod"]:
+            if f["swmod"] and f["wrdata"]:
+                body.append(f"if (r.write) begin {_sig(src, f)}_mod.send();"
+                            f" {_sig(src, f)}_mod_v <= truncate(wd); end")
+            elif f["swmod"]:
                 body.append(f"if (r.write) {_sig(src, f)}_mod.send();")
             if f["swacc"]:
                 body.append(f"if (!r.write) {_sig(src, f)}_acc.send();")

@@ -32,6 +32,12 @@ jobs:
       - name: wrdata 真的交值
         run: uv run python tests/test_wrdata.py
 
+      - name: 第一次量价目表的规划
+        run: uv run python tests/test_init.py
+
+      - name: 死输入认得 BH
+        run: uv run python tests/test_deadread.py
+
       - name: 命令面在
         run: |
           uv run xirang --help

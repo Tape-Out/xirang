@@ -19,17 +19,20 @@
 写回用 ruamel 的往返模式。`safe_dump` 会把 `ip.yaml` 里的注释全抹掉，而那些
 注释正是「为什么这么定」的唯一去处（`test.deadread` 的理由就在里面）。
 """
+import datetime
 import json
+import math
 import pathlib
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 
 from xirang_core.manifest import Bad, Pkg
 
-from xirang_area.price import gen_digest
+from xirang_area.price import gen_digest, price
 
 
 def _defaults(doc) -> dict:
@@ -299,3 +302,162 @@ def stamp(pkg: Pkg, date: str | None = None) -> bool:
     if n1 or n2 or n3:
         path.write_text(t, encoding="utf-8")
     return bool(n1 or n2 or n3)
+
+
+def grid(spec: dict) -> list:
+    """一个参数去量哪几个值：量程两端与默认值。"""
+    return sorted({v for v in (spec.get("default"), *(spec.get("range") or [])) if v is not None})
+
+
+def plan(doc) -> dict:
+    """新包第一次量价目表：要量的行、曲线的形态、离格点。纯函数，不综合。
+
+    曲线形态照全库已有的价目表：基线沿第一个参数走，特性沿同一个参数给增量，其余参数
+    各给一条以默认值为零点的增量曲线。离格点取每两个相邻格点的中点（特性全关），特性
+    多于一个时再加一行全开——点间插值与特性叠加，低估就出在这两处。
+    """
+    params = dict(doc.get("params") or {})
+    feats = dict(doc.get("features") or {})
+    for f, s in feats.items():
+        if (s or {}).get("type", "bool") != "bool":
+            raise Bad(f"--init 本版只给 bool 特性定价，{f} 是 {(s or {}).get('type')}"
+                      f"——recal 只会回填 fixed 与 points 两种形态")
+    dflt = {k: (v or {}).get("default") for k, v in params.items()}
+    off = {f: False for f in feats}
+
+    def deps(f, acc=None):
+        acc = {} if acc is None else acc
+        for d in (feats.get(f) or {}).get("depends") or []:
+            acc[d] = True
+            deps(d, acc)
+        return acc
+
+    rows: list[dict] = []
+
+    def add(cfg):
+        full = {**dflt, **off, **cfg}
+        if full not in rows:
+            rows.append(full)
+
+    per = next(iter(params), None)
+    at = grid(params[per]) if per else [None]
+
+    def here(v):
+        return {per: v} if per else {}
+
+    # 每条曲线各建一份：同一个对象挂两处，ruamel 会写出 YAML 锚点
+    def curve():
+        return {"per": per, "points": {str(v): 0.0 for v in at}} if per else {"fixed": 0.0}
+
+    for v in at:
+        add(here(v))
+    for f in feats:
+        for v in at:
+            add({**here(v), **deps(f)})
+            add({**here(v), **deps(f), f: True})
+    for q in list(params)[1:]:
+        for v in grid(params[q]):
+            add({q: v})
+
+    # 中点上特性全关与全开各量一行：只量全关的话，点间插值与特性叠加的低估碰在一起就看不见。
+    # wdt 的格点只取 16 与 32 时，width 24 窗口开着那一点低估 4.2%，全关那一点只低估 1.5%
+    on = {f: True for f in feats}
+    probes = []
+    for q, s in params.items():
+        g = grid(s)
+        for a, b in zip(g, g[1:]):
+            mid = (a + b) // 2
+            if a < mid < b:
+                probes.append({**dflt, **off, q: mid})
+                if feats:
+                    probes.append({**dflt, **on, q: mid})
+    if len(feats) > 1:
+        probes.append({**dflt, **on})
+
+    return {
+        "rows": rows,
+        "probes": probes,
+        "area": {"base": curve(),
+                 "params": {q: {"points": {str(v): 0.0 for v in grid(params[q])}}
+                            for q in list(params)[1:]}},
+        "features": {f: curve() for f in feats},
+    }
+
+
+def lift(pairs) -> float:
+    """离格点上最坏的欠估（实测高出预测的比例），向上取到千分之一。预测偏高不抵扣。"""
+    worst = max(((act - pred) / pred for pred, act in pairs if pred > 0), default=0.0)
+    return math.ceil(round(max(worst, 0.0) * 1000, 6)) / 1000
+
+
+def init(pkg: Pkg, search: list[pathlib.Path], apply: bool, say=print) -> list[str]:
+    """没有价目表的新包：照 plan 量一遍、回填曲线、用离格点定余量、盖摘要。
+
+    recal 只会重测已有的实测行，没行就「不必回填」而且不盖摘要，lint 却对每个带 bsv/ 的包
+    都要摘要——新包原来没有一条命令过得了这一关，只能手工搓价目表。
+    """
+    if pkg.is_library or pkg.is_assembly:
+        raise Bad(f"{pkg.name}：--init 只给叶子 IP 用（库包的价钱走 area.probe，装配的来自实例）")
+    try:
+        from ruamel.yaml import YAML
+    except ImportError as ex:                       # pragma: no cover
+        raise Bad("回填要 ruamel.yaml（往返写回才留得住注释）：pip install ruamel.yaml") from ex
+    Y = YAML()
+    Y.preserve_quotes = True
+    path = pkg.root / "ip.yaml"
+    with path.open(encoding="utf-8") as fh:
+        doc = Y.load(fh)
+    if (doc.get("area") or {}).get("measured"):
+        raise Bad(f"{pkg.name} 已经有实测行，重测用 recal，不带 --init")
+
+    p = plan(doc)
+    head = [f"量 {len(p['rows'])} 行，离格核对 {len(p['probes'])} 行"]
+    head += [f"  {r}" for r in p["rows"]] + [f"  离格 {r}" for r in p["probes"]]
+    if not apply:
+        return head
+    # 量一次要几分钟，先把要量什么说出来
+    for line in head:
+        say(f"  {line}")
+    log: list[str] = []
+
+    area = {"base": p["area"]["base"]}
+    if p["area"]["params"]:
+        area["params"] = p["area"]["params"]
+    area.update({
+        "margin": 0.0,
+        "model": "points-additive",
+        "error": {"bound": 0.0, "sign": "over", "note": "placeholder until the off-grid probes are measured"},
+        "measured": [{"at": dict(r), "um2": 0.0} for r in p["rows"]],
+        "corner": {"tool": "ecc", "pdk": "ics55", "freq_mhz": 100,
+                   "measured": datetime.date.today().isoformat(), "gen_digest": "sha256:0"},
+    })
+    doc["area"] = area
+    for f, spec in p["features"].items():
+        doc["features"][f]["area"] = spec
+    with path.open("w", encoding="utf-8") as fh:
+        Y.dump(doc, fh)
+    log += recal(Pkg(pkg.root), search, True, say)
+
+    fresh = Pkg(pkg.root)
+    pairs, extra = [], []
+    for cfg in p["probes"]:
+        pred, _ = price(fresh, {k: SimpleNamespace(value=v) for k, v in cfg.items()}, lift=False)
+        act = measure(fresh, cfg, search)
+        pairs.append((pred, act))
+        extra.append({"at": dict(cfg), "um2": act})
+        log.append(f"离格 {cfg}  预测 {pred:,.2f}  实测 {act:,.2f}  ({(act - pred) / pred * 100:+.2f}%)")
+    m = lift(pairs)
+
+    with path.open(encoding="utf-8") as fh:
+        doc = Y.load(fh)
+    doc["area"]["margin"] = m
+    doc["area"]["error"] = {"bound": m, "sign": "over", "note": (
+        f"first measured by ran recal --init at the range ends and the default of each parameter; "
+        f"the margin is the worst underestimate at {len(pairs)} off-grid probes" if pairs else
+        "first measured by ran recal --init; every configuration is on the grid")}
+    doc["area"]["measured"].extend(extra)
+    with path.open("w", encoding="utf-8") as fh:
+        Y.dump(doc, fh)
+    stamp(Pkg(pkg.root))
+    log.append(f"余量 {m}，写回 {path}")
+    return log

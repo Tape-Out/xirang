@@ -11,6 +11,7 @@ import yaml
 
 from xirang_area import check as area_check
 from xirang_area.price import ASM_BAND, annotate, model_note, stale
+from xirang_area.recal import init as do_init
 from xirang_area.recal import recal as do_recal
 from xirang_back.ecc import synth
 from xirang_out.export import to_core, to_kconfig, to_tar
@@ -295,9 +296,10 @@ def cmd_recal(args) -> int:
     if args.top not in idx:
         raise Bad(f"找不到包 {args.top}")
     pkg = idx[args.top]
-    print(f"{BOLD}{pkg.name}{OFF}  回填价目表"
+    print(f"{BOLD}{pkg.name}{OFF}  {'第一次量价目表' if args.init else '回填价目表'}"
           f"{'' if args.apply else '（只看不写，加 --apply 才落盘）'}")
-    for line in do_recal(pkg, find.roots(args.path), args.apply):
+    run = do_init if args.init else do_recal
+    for line in run(pkg, find.roots(args.path), args.apply):
         if not line.startswith("{"):
             print(f"  {line}")
     if args.apply:
@@ -582,6 +584,8 @@ def main(argv=None) -> int:
     b = sub.add_parser("recal", help="重测价目表并回填")
     b.add_argument("top")
     b.add_argument("--apply", action="store_true", help="真的写回 ip.yaml")
+    b.add_argument("--init", action="store_true",
+                   help="没有价目表的新包：按量程两端与默认值生成实测行，量完用离格点定余量")
     b.set_defaults(fn=cmd_recal)
 
     b = sub.add_parser("build", help="生成并综合")

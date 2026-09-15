@@ -44,6 +44,9 @@ jobs:
       - name: 控制口可以一直是会停顿的那个
         run: uv run python tests/test_slowalways.py
 
+      - name: 单字段位域不从第 0 位起
+        run: uv run python tests/test_fieldlo.py
+
       - name: 命令面在
         run: |
           uv run xirang --help

@@ -240,8 +240,13 @@ def _rows(spec: dict, params: list[str], dw: int = 32) -> list[dict]:
                 "onread": f.get("onread"),
                 "legal": lg,
             })
+        # 单字段而位域不从第 0 位起（hart 的 mepc 占 31:2），读写得按位域切，走多字段那条路；
+        # 信号名仍按 multi 起，单个 val 字段照旧叫寄存器名
+        shaped = multi or str(flds[0]["lo"]) != "0"
+        if shaped and not multi and flds[0]["onread"]:
+            raise Bad(f"{r['name']}: 位域不从第 0 位起的单字段本版不支持 onread")
         out.append({"name": r["name"], "offset": off, "desc": r.get("desc", ""),
-                    "feat": r.get("feature"), "multi": multi, "fields": flds,
+                    "feat": r.get("feature"), "multi": multi, "shaped": shaped, "fields": flds,
                     "arr": arr, "rw": int(rw) if rw else dw,
                     "atomic": r.get("atomic"), "alias": r.get("alias")})
 
@@ -490,7 +495,7 @@ def bsv(pkg: Pkg) -> str:
         return e
 
     def read_expr(reg, ix=""):
-        if not reg["multi"]:
+        if not reg["shaped"]:
             f = reg["fields"][0]
             if f["sw"] == "w":
                 return "0"
@@ -547,9 +552,9 @@ def bsv(pkg: Pkg) -> str:
         L += [f"      if (offw >= {wide}'h{base:0{hexw}X} && "
               f"offw < {wide}'h{base:0{hexw}X} + {span}{inElem}{gate}) begin",
               "        err = False;"]
-        if words > 1 and reg["multi"]:
-            raise Bad(f"{reg['name']}：比总线宽的寄存器本版只支持单字段")
-        if words == 1 and reg["multi"]:
+        if words > 1 and reg["shaped"]:
+            raise Bad(f"{reg['name']}：比总线宽的寄存器本版只支持从第 0 位起的单字段")
+        if words == 1 and reg["shaped"]:
             # 数组也可以是多字段的（pinmux 的 pad 有五个）。原来这条路径只译
             # fields[0]，另外四个字段有寄存器、有方法，总线上却根本访问不到。
             L += [f"        Bit#(dw) cur = {read_expr(reg, ix)};",
@@ -666,7 +671,7 @@ def bsv(pkg: Pkg) -> str:
             src = {**tgt,
                    "fields": [f for f in tgt["fields"] if f["name"] in keep]}
         body = []
-        if src["multi"]:
+        if src["shaped"]:
             # 先拼当前值、套完字节选通再切回各字段——逐字段套选通会算错，
             # 因为选通按字节给，字段边界不一定对齐字节。
             body.append(f"Bit#(dw) cur = {read_expr(src)};")

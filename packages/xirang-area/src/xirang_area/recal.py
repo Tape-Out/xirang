@@ -22,9 +22,11 @@
 import datetime
 import json
 import math
+import os
 import pathlib
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -54,6 +56,24 @@ def _num(kv):
     return int(s) if s.lstrip("-").isdigit() else kv
 
 
+def _run(cmd: list[str], timeout: float) -> subprocess.CompletedProcess:
+    """起一次构建，超时时整组杀掉。
+
+    构建会再起子进程（`xirang build` 起 ecc，ecc 起 yosys），`subprocess.run` 的 timeout 只杀它直接起的那一个：
+    gzip 的第一份价目表在 winBits=12 那一点综合超过 7200 秒，`xirang.cli` 被杀了，ecc 与 yosys 成了孤儿，
+    睡着占 736 MB 两个小时。新会话起进程，超时时按进程组杀，孙辈一起走。
+    """
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                            start_new_session=True)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.communicate()
+        raise
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
+
 def measure(pkg: Pkg, knobs: dict, search: list[pathlib.Path]) -> float:
     """量一个配置。中立顶层——价目表量的就是这一层。"""
     d = pathlib.Path(tempfile.mkdtemp(prefix="xirang-recal-"))
@@ -64,7 +84,7 @@ def measure(pkg: Pkg, knobs: dict, search: list[pathlib.Path]) -> float:
         cmd += ["build", pkg.name, "--neutral", "-o", str(d)]
         for k, v in knobs.items():
             cmd += ["-s", f"{k}={json.dumps(v) if isinstance(v, bool) else v}"]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
+        r = _run(cmd, 7200)
         m = re.search(r"实测面积\s+([\d,]+\.\d+)", r.stdout)
         if not m:
             raise Bad(f"{pkg.name} {knobs} 量不出来：{(r.stdout + r.stderr)[-400:]}")

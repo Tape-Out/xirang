@@ -553,12 +553,19 @@ def bsv(pkg: Pkg) -> str:
             # 数组也可以是多字段的（pinmux 的 pad 有五个）。原来这条路径只译
             # fields[0]，另外四个字段有寄存器、有方法，总线上却根本访问不到。
             L += [f"        Bit#(dw) cur = {read_expr(reg, ix)};",
-                  "        Bit#(dw) nw = applyStrb(cur, wd, r.wstrb);",
-                  "        if (r.write) begin"]
+                  "        Bit#(dw) nw = applyStrb(cur, wd, r.wstrb);"]
+            # 写一清零只清写进来的 1：没选通的字节不算写了 1
+            if any(g["woclr"] for g in reg["fields"]):
+                L.append("        Bit#(dw) wz = applyStrb(0, wd, r.wstrb);")
+            L.append("        if (r.write) begin")
             for g in reg["fields"]:
                 if g["sw"] in ("rw", "w") and not g["vol"]:
                     asn = (f"{port(reg, g, 1, ix)} <= "
                            f"nw[{g['hi']}:{g['lo']}]{setback(reg, g)};")
+                    # 多字段与数组这几条原来没管 woclr，写 1 去清反而置上（onew 的 status.done）
+                    if g["woclr"]:
+                        t = port(reg, g, 1, ix)
+                        asn = f"{t} <= ({t} & ~wz[{g['hi']}:{g['lo']}]){setback(reg, g)};"
                     if g["legal"] is not None:
                         asn = f"if (legal_{_sig(reg, g)}(nw[{g['hi']}:{g['lo']}])) {asn}"
                     if g["feat"] and g["feat"] != reg["feat"]:
@@ -587,6 +594,8 @@ def bsv(pkg: Pkg) -> str:
                       f"        else {tgt} <= {v};"]
             else:
                 put = f"{tgt} <= truncate(wd);"
+                if f["woclr"]:
+                    put = f"{tgt} <= {tgt} & ~truncate(wd);"
                 if f["legal"] is not None:
                     put = f"begin if (legal_{_sig(reg, f)}(truncate(wd))) {put} end"
                 L.append(f"        if (r.write) {put}")
@@ -662,12 +671,17 @@ def bsv(pkg: Pkg) -> str:
             # 因为选通按字节给，字段边界不一定对齐字节。
             body.append(f"Bit#(dw) cur = {read_expr(src)};")
             body.append("Bit#(dw) nw = applyStrb(cur, wd, r.wstrb);")
+            if any(f["woclr"] for f in src["fields"]):
+                body.append("Bit#(dw) wz = applyStrb(0, wd, r.wstrb);")
             body.append("if (r.write) begin")
             for f in src["fields"]:
                 if f["sw"] in ("rw", "w") and not f["vol"]:
                     tgtp = port(src, f, 1)
                     asn = (f"{tgtp} <= nw[{f['hi']}:{f['lo']}]"
                            f"{setback(src, f)};")
+                    if f["woclr"]:
+                        asn = (f"{tgtp} <= ({tgtp} & ~wz[{f['hi']}:{f['lo']}])"
+                               f"{setback(src, f)};")
                     if f["legal"] is not None:
                         asn = f"if (legal_{_sig(src, f)}(nw[{f['hi']}:{f['lo']}])) {asn}"
                     if f["feat"] and f["feat"] != reg["feat"]:

@@ -32,6 +32,9 @@ jobs:
       - name: wrdata 真的交值
         run: uv run python tests/test_wrdata.py
 
+      - name: woclr 每条写路径都清零
+        run: uv run python tests/test_woclr.py
+
       - name: 第一次量价目表的规划
         run: uv run python tests/test_init.py
 

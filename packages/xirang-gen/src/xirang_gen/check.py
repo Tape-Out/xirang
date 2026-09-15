@@ -26,17 +26,24 @@ def dead_inputs(pkg: Pkg) -> list[str]:
     dead: list[str] = []
     for f in sorted(bsv.glob("*.bsv")) + sorted(bsv.glob("*.bs")):
         src = f.read_text(encoding="utf-8", errors="ignore")
-        for m in re.finditer(r"^\s*Wire#\([^;]*?\)\s+(\w+)\s*<-\s*mk(?:Bypass|D)Wire",
-                             src, re.M):
+        # 原来只认 BSV 的写法，.bs 里的线一根都看不见。BH 的线是 `x :: Wire t <- mkBypassWire`，
+        # 或者先签名、下一行再 `x <- mkDWire 0`；注释是 `--`，写是 `:=`，而 `<=` 在 BH 里是比较、算读
+        bh = f.suffix == ".bs"
+        decl = (r"^\s*(\w+)\s*(?:::[^\n]*?)?<-\s*mk(?:Bypass|D)Wire\b" if bh
+                else r"^\s*Wire#\([^;]*?\)\s+(\w+)\s*<-\s*mk(?:Bypass|D)Wire")
+        for m in re.finditer(decl, src, re.M):
             name = m.group(1)
             uses = 0
             for line in src.splitlines():
-                bare = line.split("//")[0]
+                bare = line.split("--" if bh else "//")[0]
                 if re.search(rf"\b{name}\b", bare) is None:
                     continue
-                if re.search(rf"\b{name}\s*<-\s*mk", bare):
+                if re.search(rf"\b{name}\s*(?:::[^\n]*)?<-\s*mk", bare):
                     continue          # 声明
-                if re.search(rf"\b{name}\s*(?:\._write\(|<=)", bare):
+                if bh and re.search(rf"^\s*{name}\s*::", bare):
+                    continue          # BH 的类型签名
+                if re.search(rf"\b{name}\s*(?:\._write\b|:=)" if bh
+                             else rf"\b{name}\s*(?:\._write\(|<=)", bare):
                     continue          # 只是在写它
                 uses += 1
             if uses == 0:

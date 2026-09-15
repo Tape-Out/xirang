@@ -9,7 +9,7 @@
 实例声明的 `RegManager` 子接口是**发起口**：核要取指与访存、DMA 要搬数据。
 它们不接到顶层，而是接进 `mkXbar` 与外部总线一起排队。
 """
-from xirang_core.manifest import Bad, Pkg
+from xirang_core.manifest import Bad, Pkg, slow_ctrl
 from xirang_core.model import Resolved
 from xirang_gen.wrap import BUSES, sub_targs
 
@@ -92,8 +92,8 @@ def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
             else:
                 one = f"tagged Valid {inst.name}.{ip_irqs[0]['name']}"
             irqs.append("False" if not ip_irqs else one[len("tagged Valid "):])
-            cs, sw = e.get("ctrl_slow"), e.get("slow_when")
-            if cs and sw and inst.values[sw].value:
+            cs = e.get("ctrl_slow")
+            if slow_ctrl(e, inst.values):
                 slows.append(f"  slowv[{ks}] = slowDevice({aw}'h{inst.addr:0{hexw}X}, "
                              f"{aw}'h{span:0{hexw}X}, "
                              f"narrowT({inst.name}.{cs}), {one});")

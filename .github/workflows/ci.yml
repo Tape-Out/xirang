@@ -41,6 +41,9 @@ jobs:
       - name: 死输入认得 BH
         run: uv run python tests/test_deadread.py
 
+      - name: 控制口可以一直是会停顿的那个
+        run: uv run python tests/test_slowalways.py
+
       - name: 命令面在
         run: |
           uv run xirang --help

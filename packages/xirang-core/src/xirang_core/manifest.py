@@ -61,6 +61,19 @@ TOP_KEYS = {"name", "version", "spec", "kind", "lang", "identity", "contract",
             "bus", "instances", "connect", "pipe", "test", "__path__"}
 
 
+def slow_ctrl(emit: dict, vals) -> bool:
+    """这一点走不走会停顿的那个控制口。
+
+    清单校验、顶层生成与装配都要回答这一问，规则只写在这里，免得三处各认各的。
+    `slow_when: true` 是给片外存储控制器这类每一笔都要等的 IP：没有同拍答的形态可选，
+    不必为它编一个恒开的特性。
+    """
+    if not emit.get("ctrl_slow"):
+        return False
+    sw = emit.get("slow_when")
+    return sw is True or bool(vals[sw].value)
+
+
 class Pkg:
     """一个包的清单。有 instances 就是装配，没有就是叶子 IP。"""
 
@@ -194,13 +207,15 @@ class Pkg:
                 if extra:
                     raise Bad(f"{self.path}: emit 的 bsv 段有不认识的键 "
                               f"{sorted(extra)}——写错的键会被默默忽略")
-                # 会停顿的控制口要说清「哪个特性开着时用它」，否则没法选
+                # 会停顿的控制口要说清什么时候用它：写特性名是那个特性开着时，写 true 是一直用
                 if ("ctrl_slow" in e) != ("slow_when" in e):
                     raise Bad(f"{self.path}: emit 的 ctrl_slow 与 slow_when 要成对出现"
                               f"——只给一个，选口的条件就没了")
-                if "slow_when" in e and e["slow_when"] not in (self.ip.get("features") or {}):
-                    raise Bad(f"{self.path}: emit.slow_when 指的 {e['slow_when']!r} "
-                              f"不是这个包的特性")
+                sw = e.get("slow_when")
+                if "slow_when" in e and sw is not True and not (
+                        isinstance(sw, str) and sw in (self.ip.get("features") or {})):
+                    raise Bad(f"{self.path}: emit.slow_when 只能写 true 或这个包的特性名，"
+                              f"写的是 {sw!r}")
                 for s in e.get("pins") or []:
                     miss = [k for k in ("name", "type") if k not in s]
                     if miss:

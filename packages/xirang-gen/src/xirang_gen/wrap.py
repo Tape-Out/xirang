@@ -6,7 +6,7 @@
 
 手写的话是 **IP 数 × 总线数** 份样板，正是立项时要消灭的那个矩阵。
 """
-from xirang_core.manifest import Bad, Pkg
+from xirang_core.manifest import Bad, Pkg, slow_ctrl
 
 # 每种总线：BSV 包名、引脚接口、绑定器、以及实现它的那个仓（面积记在那里）。
 # 加一种总线是往这张表加一行。
@@ -63,6 +63,7 @@ def _shape(pkg: Pkg, vals):
     ctrl = (pkg.ip.get("contract") or {}).get("ctrl") or {}
     aw, dw = ctrl.get("aw", 8), ctrl.get("dw", 32)
     nums = [str(vals[k].value) for k in knobs if knobs[k]["kind"] == "param"]
+    slow = slow_ctrl(b, vals)
     return {
         "b": b,
         "aw": aw, "dw": dw,
@@ -72,14 +73,9 @@ def _shape(pkg: Pkg, vals):
         "cap": pkg.name[:1].upper() + pkg.name[1:],
         "tag": "_".join(nums) if nums else "0",
         "subs": b.get("pins") or [],
-        # 控制口按特性选：`slow_when` 那个特性开着就走会停顿的那个口。
         # 中立顶层是「独立流片的样子」，同步存储的样子就是会停顿的那个口。
-        "ctrl_name": (b["ctrl_slow"]
-                      if b.get("ctrl_slow") and vals[b["slow_when"]].value
-                      else b.get("ctrl", "regs")),
-        "ctrl_type": ("RegTarget"
-                      if b.get("ctrl_slow") and vals[b["slow_when"]].value
-                      else "RegIf"),
+        "ctrl_name": b["ctrl_slow"] if slow else b.get("ctrl", "regs"),
+        "ctrl_type": "RegTarget" if slow else "RegIf",
         "irqs": [(i["name"], i.get("width"))
                  for i in (pkg.ip.get("contract") or {}).get("irq", []) or []],
     }

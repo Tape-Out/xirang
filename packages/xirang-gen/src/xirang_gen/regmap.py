@@ -6,6 +6,7 @@
 对拍结论（V1）：生成件与手写件时序结构 20/20 逐位一致，行为 5 配置 × 2 万拍零失配。
 """
 import pathlib
+import re
 
 from xirang_core.manifest import Bad, Pkg
 
@@ -30,7 +31,7 @@ HW = {"rw", "r", "w", "na"}
 # 字段允许的键。不在表里的一律报错——静默忽略过三次，每次都生成出默默错了的硬件。
 FIELD_KEYS = {"name", "bits", "width", "desc", "sw", "hw", "onwrite", "onread",
               "hwset", "stickybit", "reset", "feature", "volatile", "swacc",
-              "swmod", "wrdata", "hweach"}
+              "swmod", "wrdata", "hweach", "legal"}
 # 读带副作用。硬件自旋锁只能这么做：取锁必须与读回同一拍完成，
 # 拆成「读一次再写一次」就有窗口，两个核会同时拿到锁。
 ONREAD = {"rset", "rclr"}
@@ -60,6 +61,70 @@ def _bits(f, params):
         return hi, lo, str(hi - lo + 1)
     w = _width(f.get("width", 32), params)
     return None, 0, w
+
+
+# 合法区间的一端：整数，或参数名，或「参数 ± 整数」（pinmux 的 sel 上界是 funcs - 1）
+_BOUND = re.compile(r"\s*([A-Za-z_]\w*)\s*(?:([+-])\s*(\d+))?\s*")
+
+
+def _bound(v, params: list[str], where: str):
+    if isinstance(v, int) and not isinstance(v, bool):
+        return v
+    m = _BOUND.fullmatch(str(v))
+    if not m or m[1] not in params:
+        raise Bad(f"{where}: legal 的界 {v!r} 只能是整数、参数名或「参数 ± 整数」")
+    return (m[1], int(m[3] or 0) * (-1 if m[2] == "-" else 1))
+
+
+def _legal(f, params: list[str], where: str):
+    """legal 列表 -> [(lo, hi, feature)]。整数是单点，{min, max} 是闭区间。"""
+    lg = f.get("legal")
+    if lg is None:
+        return None
+    if not isinstance(lg, list) or not lg:
+        raise Bad(f"{where}: legal 是非空列表，元素是整数或 {{min, max}}")
+    out = []
+    for e in lg:
+        if isinstance(e, int) and not isinstance(e, bool):
+            out.append((e, e, None))
+            continue
+        if not isinstance(e, dict):
+            raise Bad(f"{where}: legal 的元素 {e!r} 既不是整数也不是 {{min, max}}")
+        unknown = set(e) - {"min", "max", "feature"}
+        if unknown:
+            raise Bad(f"{where}: legal 区间里不认识的键 {sorted(unknown)}")
+        if "min" not in e or "max" not in e:
+            raise Bad(f"{where}: legal 区间要同时写 min 与 max")
+        lo, hi = _bound(e["min"], params, where), _bound(e["max"], params, where)
+        if isinstance(lo, int) and isinstance(hi, int) and lo > hi:
+            raise Bad(f"{where}: legal 区间 min {lo} 大于 max {hi}")
+        out.append((lo, hi, e.get("feature")))
+    return out
+
+
+def legal_at(lg, v: int, on) -> bool:
+    """具体值合不合法。on(特性名) 说那个特性开没开；界须已是整数。"""
+    return any(lo <= v <= hi for lo, hi, ft in lg if ft is None or on(ft))
+
+
+def _legal_bsv(f) -> str:
+    """legal -> 以 v 为自变量的 BSV 布尔式。参数界留给 bsc 展开。"""
+    def b(x):
+        if isinstance(x, int):
+            return str(x)
+        k, d = x
+        off = f" + {d}" if d > 0 else f" - {-d}" if d < 0 else ""
+        return f"fromInteger(valueOf({k}){off})"
+    top = (1 << int(f["w"])) - 1 if str(f["w"]).isdigit() else None
+    terms = []
+    for lo, hi, ft in f["legal"]:
+        if lo == hi:
+            t = f"v == {b(lo)}"
+        else:
+            t = " && ".join(([f"v >= {b(lo)}"] if lo != 0 else [])
+                            + ([f"v <= {b(hi)}"] if hi != top else [])) or "True"
+        terms.append(f"(cfg.{ft} && ({t}))" if ft else f"({t})")
+    return " || ".join(terms)
 
 
 def _rows(spec: dict, params: list[str], dw: int = 32) -> list[dict]:
@@ -134,6 +199,29 @@ def _rows(spec: dict, params: list[str], dw: int = 32) -> list[dict]:
                 raise Bad(f"{r['name']}.{f['name']}: volatile 字段没有存储，"
                           f"读它不可能有副作用")
             hi, lo, w = _bits(f, params)
+            where = f"{r['name']}.{f['name']}"
+            lg = _legal(f, params, where)
+            if lg is not None:
+                if f.get("sw", "rw") not in ("rw", "w"):
+                    raise Bad(f"{where}: 软件写不进来的字段谈不上 legal")
+                if f.get("volatile") or f.get("onwrite") or f.get("onread") or f.get("hwset"):
+                    raise Bad(f"{where}: legal 管的是软件写进存储的值，"
+                              f"不与 volatile、onwrite、onread、hwset 同用")
+                if rw is not None and int(rw) > dw:
+                    raise Bad(f"{where}: 比总线宽的寄存器分两半写，本版不支持 legal")
+                if f.get("reset") is None:
+                    raise Bad(f"{where}: legal 字段必须给 reset——没有复位，"
+                              f"上电那一刻读出来的就可能不合法")
+                if w.isdigit():
+                    top = (1 << int(w)) - 1
+                    for x0, x1, _ in lg:
+                        for b in (x0, x1):
+                            if isinstance(b, int) and not 0 <= b <= top:
+                                raise Bad(f"{where}: legal 的界 {b} 放不进 {w} 位")
+                    base = [x for x in lg if x[2] is None]
+                    if (all(isinstance(x0, int) and isinstance(x1, int) for x0, x1, _ in base)
+                            and not legal_at(base, int(f["reset"]) & top, lambda _: False)):
+                        raise Bad(f"{where}: 复位值 {f['reset']} 不在不依赖特性的合法值里")
             if multi:
                 for a, b, nm in span:
                     if not (hi < a or lo > b):
@@ -150,6 +238,7 @@ def _rows(spec: dict, params: list[str], dw: int = 32) -> list[dict]:
                 "wrdata": bool(f.get("wrdata")),
                 "hweach": bool(f.get("hweach")),
                 "onread": f.get("onread"),
+                "legal": lg,
             })
         out.append({"name": r["name"], "offset": off, "desc": r.get("desc", ""),
                     "feat": r.get("feature"), "multi": multi, "fields": flds,
@@ -176,6 +265,9 @@ def _rows(spec: dict, params: list[str], dw: int = 32) -> list[dict]:
             if g is None:
                 raise Bad(f"{x['name']}.{f['name']} 在 {tgt['name']} 里没有"
                           f"同名字段——别名只能露目标已有的字段")
+            if f["legal"] is not None:
+                raise Bad(f"{x['name']}.{f['name']}: legal 写在 {tgt['name']} 上——"
+                          f"别名共用目标的存储，也就共用它的合法值")
             if (f["hi"], f["lo"]) != (g["hi"], g["lo"]):
                 raise Bad(f"{x['name']}.{f['name']} 的位域与 {tgt['name']} "
                           f"的不一致：{f['hi']}:{f['lo']} vs {g['hi']}:{g['lo']}"
@@ -197,7 +289,8 @@ def bsv(pkg: Pkg) -> str:
     dw_i = int((spec.get("contract") or {}).get("dw", 32))
     rs = _rows(spec, params, dw_i)
     feats = sorted({f["feat"] for r in rs for f in r["fields"] if f["feat"]}
-                   | {r["feat"] for r in rs if r["feat"]})
+                   | {r["feat"] for r in rs if r["feat"]}
+                   | {ft for r in rs for f in r["fields"] for _, _, ft in f["legal"] or [] if ft})
     tparams = ", ".join(["numeric type aw", "numeric type dw"]
                         + [f"numeric type {p}" for p in params])
     targs = ", ".join(["aw", "dw"] + params)
@@ -405,6 +498,16 @@ def bsv(pkg: Pkg) -> str:
         parts = [_fld_read(reg, f, ix) for f in reg["fields"]]
         return " |\n                      ".join(parts)
 
+    # 非法写保持原值（spec/regmap.md 八之四）：判定只看写进来的值与特性开关
+    for reg in rs:
+        if reg["alias"]:
+            continue
+        for f in reg["fields"]:
+            if f["legal"] is not None:
+                L += [f"  function Bool legal_{_sig(reg, f)}(Bit#({f['w']}) v);",
+                      f"    return {_legal_bsv(f)};",
+                      "  endfunction", ""]
+
     L += ["  RegIf#(aw, dw) rf = interface RegIf;",
           "    method ActionValue#(RegRsp#(dw)) access(RegReq#(aw, dw) r);",
           "      Bit#(dw) rd = 0;", "      Bool err = True;   // 先假定未命中",
@@ -456,6 +559,8 @@ def bsv(pkg: Pkg) -> str:
                 if g["sw"] in ("rw", "w") and not g["vol"]:
                     asn = (f"{port(reg, g, 1, ix)} <= "
                            f"nw[{g['hi']}:{g['lo']}]{setback(reg, g)};")
+                    if g["legal"] is not None:
+                        asn = f"if (legal_{_sig(reg, g)}(nw[{g['hi']}:{g['lo']}])) {asn}"
                     if g["feat"] and g["feat"] != reg["feat"]:
                         L.append(f"          if (cfg.{g['feat']}) {asn}")
                     else:
@@ -480,11 +585,13 @@ def bsv(pkg: Pkg) -> str:
                 L += [f"        rd = zeroExtend({tgt});",
                       f"        if (r.write) {tgt} <= truncate(wd);",
                       f"        else {tgt} <= {v};"]
-            elif f["sw"] == "w":
-                L += [f"        if (r.write) {tgt} <= truncate(wd);"]
             else:
-                L += [f"        if (r.write) {tgt} <= truncate(wd);",
-                      f"        else rd = zeroExtend({tgt});"]
+                put = f"{tgt} <= truncate(wd);"
+                if f["legal"] is not None:
+                    put = f"begin if (legal_{_sig(reg, f)}(truncate(wd))) {put} end"
+                L.append(f"        if (r.write) {put}")
+                if f["sw"] != "w":
+                    L.append(f"        else rd = zeroExtend({tgt});")
             ix = f" {_sig(reg, f)}_acc_i <= truncate({nidx});" if reg["arr"] else ""
             if f["swacc"]:
                 L += [f"        if (!r.write) begin"
@@ -561,6 +668,8 @@ def bsv(pkg: Pkg) -> str:
                     tgtp = port(src, f, 1)
                     asn = (f"{tgtp} <= nw[{f['hi']}:{f['lo']}]"
                            f"{setback(src, f)};")
+                    if f["legal"] is not None:
+                        asn = f"if (legal_{_sig(src, f)}(nw[{f['hi']}:{f['lo']}])) {asn}"
                     if f["feat"] and f["feat"] != reg["feat"]:
                         body.append(f"  if (cfg.{f['feat']}) {asn}")
                     else:
@@ -580,6 +689,11 @@ def bsv(pkg: Pkg) -> str:
             if f["woclr"]:
                 body = [f"if (r.write) {wr} <= ({wr} & ~truncate(wd)){sb};",
                         f"else rd = zeroExtend({wr});"]
+            elif f["legal"] is not None:
+                nv = f"Bit#({f['w']}) nv = truncate(applyStrb(zeroExtend({wr}), wd, r.wstrb));"
+                body = [f"if (r.write) begin {nv} if (legal_{_sig(src, f)}(nv)) {wr} <= nv; end"]
+                if f["sw"] == "rw":
+                    body.append(f"else rd = zeroExtend({wr});")
             elif f["sw"] == "rw":
                 body = [f"if (r.write) {wr} <= truncate("
                         f"applyStrb(zeroExtend({wr}), wd, r.wstrb)){sb};",

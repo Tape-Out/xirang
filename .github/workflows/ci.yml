@@ -26,6 +26,9 @@ jobs:
       - name: 结构
         run: uv run python tests/test_structure.py
 
+      - name: legal 的校验
+        run: uv run python tests/test_legal.py
+
       - name: 命令面在
         run: |
           uv run xirang --help

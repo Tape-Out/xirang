@@ -503,7 +503,7 @@ def bsv(pkg: Pkg) -> str:
         parts = [_fld_read(reg, f, ix) for f in reg["fields"]]
         return " |\n                      ".join(parts)
 
-    # 非法写保持原值（spec/regmap.md 八之四）：判定只看写进来的值与特性开关
+    # 非法写保持原值（xrspec/regmap.md 八之四）：判定只看写进来的值与特性开关
     for reg in rs:
         if reg["alias"]:
             continue

@@ -98,7 +98,7 @@ instances:
 deps: { hwcore: ^0.1, amba: ^0.1 }
 ```
 
-装配自己不写 RTL。字段细则见 [`spec/regmap.md`](https://github.com/Tape-Out/xrspec/blob/main/regmap.md)。
+装配自己不写 RTL。字段细则见 [`xrspec/regmap.md`](https://github.com/Tape-Out/xrspec/blob/main/regmap.md)。
 
 </details>
 <hr>
@@ -182,7 +182,7 @@ $ uv sync --all-packages && uv run pytest -q && uv run ruff check .
 
 ### 相关项目
 
-[`spec`](https://github.com/Tape-Out/xrspec) 规范 · [`xrskel`](https://github.com/Tape-Out/xrskel) 模板
+[`xrspec`](https://github.com/Tape-Out/xrspec) 规范 · [`xrskel`](https://github.com/Tape-Out/xrskel) 模板
 <hr>
 
 ### 许可证

@@ -1,12 +1,10 @@
-<table align="center" border="0"><tr>
-<td width="120" align="center"><img src="docs/logo.svg" width="96" alt=""></td>
-<td align="left">
-<h3>息壤</h3>
-<sub>XiRang · 硬件的包管理器与装配器</sub>
-</td>
-</tr></table>
-
 <div align="center">
+
+<br>
+
+<img src="docs/banner.svg" width="430" alt="息壤 XiRang">
+
+<br><br>
 
 <a href="pyproject.toml"><img alt="python" src="https://img.shields.io/badge/python%203.14+-2E3440?style=flat-square"></a>
 <a href="https://github.com/Tape-Out/spec"><img alt="spec" src="https://img.shields.io/badge/spec%20v0.2.3-4C6A92?style=flat-square"></a>
@@ -66,16 +64,12 @@ emac  矩阵 7 点
 
 ### 清单格式
 
-<table align="center">
-<tr><td align="right"><samp>ip.yaml</samp></td>
-    <td><sub>身份 · 契约 · 旋钮 · 价目表 · 依赖；有 <samp>instances</samp> 即为装配</sub></td></tr>
-<tr><td align="right"><samp>regmap.yaml</samp></td>
-    <td><sub>寄存器与字段，属性名同 SystemRDL 2.0</sub></td></tr>
-<tr><td align="right"><samp>workspace.yaml</samp></td>
-    <td><sub>这次用到哪些包</sub></td></tr>
-<tr><td align="right"><samp>xirang.lock</samp></td>
-    <td><sub>解析结果与内容摘要，跟着装配走</sub></td></tr>
-</table>
+| <sub>文件</sub> | <sub>内容</sub> |
+| :--: | :--: |
+| <sub><samp>ip.yaml</samp></sub> | <sub>身份 · 契约 · 旋钮 · 价目表 · 依赖；有 <samp>instances</samp> 即为装配</sub> |
+| <sub><samp>regmap.yaml</samp></sub> | <sub>寄存器与字段，属性名同 SystemRDL 2.0</sub> |
+| <sub><samp>workspace.yaml</samp></sub> | <sub>这次用到哪些包</sub> |
+| <sub><samp>xirang.lock</samp></sub> | <sub>解析结果与内容摘要，跟着装配走</sub> |
 
 <details>
 <summary><sub>清单样例</sub></summary>
@@ -111,18 +105,14 @@ deps: { hwcore: ^0.1, amba: ^0.1 }
 
 ### 导出目标
 
-<table align="center">
-<tr>
-<td align="right"><samp>rdl</samp></td><td><sub>SystemRDL 2.0</sub></td>
-<td align="right"><samp>core</samp></td><td><sub>FuseSoC CAPI2</sub></td>
-<td align="right"><samp>resolved</samp></td><td><sub>解出的配置与来历</sub></td>
-</tr>
-<tr>
-<td align="right"><samp>ipxact</samp></td><td><sub>IP-XACT 1685</sub></td>
-<td align="right"><samp>kconfig</samp></td><td><sub>menuconfig 菜单</sub></td>
-<td align="right"><samp>tar</samp></td><td><sub>自足源码包</sub></td>
-</tr>
-</table>
+| <sub>目标</sub> | <sub>是什么</sub> |
+| :--: | :--: |
+| <sub><samp>rdl</samp></sub> | <sub>SystemRDL 2.0</sub> |
+| <sub><samp>ipxact</samp></sub> | <sub>IP-XACT 1685</sub> |
+| <sub><samp>core</samp></sub> | <sub>FuseSoC CAPI2</sub> |
+| <sub><samp>kconfig</samp></sub> | <sub>menuconfig 菜单</sub> |
+| <sub><samp>resolved</samp></sub> | <sub>解出的配置与来历</sub> |
+| <sub><samp>tar</samp></sub> | <sub>自足源码包</sub> |
 <hr>
 
 ### 门禁清单
@@ -130,23 +120,20 @@ deps: { hwcore: ^0.1, amba: ^0.1 }
 <details>
 <summary><sub>十道门禁</sub></summary>
 
-<br>
-
-<table>
-<tr><td width="120">死输入</td><td>引脚驱进来的值，模块里一次也没读</td></tr>
-<tr><td>未用方法</td><td>寄存器接口暴露的方法，实现里没有用到</td></tr>
-<tr><td>地址重叠</td><td>某个合法配置下，两个寄存器占同一个地址</td></tr>
-<tr><td>调度</td><td>装配生成 Verilog 时 <samp>bsc</samp> 报出的规则冲突</td></tr>
-<tr><td>价目表失效</td><td>价目表量的是另一份生成产物</td></tr>
-<tr><td>未计价</td><td>改这个旋钮，面积预测不动</td></tr>
-<tr><td>未实测</td><td>标了价，却没有一行实测打开过这个特性</td></tr>
-<tr><td>曲线平坦</td><td>参数改了，量出来的面积不变</td></tr>
-<tr><td>低估</td><td>预测面积低于实测</td></tr>
-<tr><td>工作区</td><td>清单、源码与锁不一致</td></tr>
-</table>
+| <sub>门禁</sub> | <sub>拦下什么</sub> |
+| :--: | :--: |
+| <sub>死输入</sub> | <sub>引脚驱进来的值，模块里一次也没读</sub> |
+| <sub>未用方法</sub> | <sub>寄存器接口暴露的方法，实现里没有用到</sub> |
+| <sub>地址重叠</sub> | <sub>某个合法配置下，两个寄存器占同一个地址</sub> |
+| <sub>调度</sub> | <sub>装配生成 Verilog 时 <samp>bsc</samp> 报出的规则冲突</sub> |
+| <sub>价目表失效</sub> | <sub>价目表量的是另一份生成产物</sub> |
+| <sub>未计价</sub> | <sub>改这个旋钮，面积预测不动</sub> |
+| <sub>未实测</sub> | <sub>标了价，却没有一行实测打开过这个特性</sub> |
+| <sub>曲线平坦</sub> | <sub>参数改了，量出来的面积不变</sub> |
+| <sub>低估</sub> | <sub>预测面积低于实测</sub> |
+| <sub>工作区</sub> | <sub>清单、源码与锁不一致</sub> |
 
 </details>
-
 <hr>
 
 ### 子包说明
@@ -154,23 +141,18 @@ deps: { hwcore: ^0.1, amba: ^0.1 }
 <details>
 <summary><sub>八个包，与各自的改动来源</sub></summary>
 
-<br>
-
-<table>
-<tr><td width="130"><samp>xirang-core</samp></td><td width="330">清单 schema · 层叠与求解 · 依赖与锁 · 矩阵派生</td><td>规范涨版本</td></tr>
-<tr><td><samp>xirang-gen</samp></td><td>寄存器图 → BSV / C 头 / 测试台 · 装配 → 顶层</td><td>目标语言、契约形态</td></tr>
-<tr><td><samp>xirang-area</samp></td><td>价目表 · 面积预测 · 回填</td><td>面积模型</td></tr>
-<tr><td><samp>xirang-back</samp></td><td>驱动综合与仿真工具</td><td>EDA 工具与版本</td></tr>
-<tr><td><samp>xirang-out</samp></td><td>六种导出目标与读回</td><td>别人的格式</td></tr>
-<tr><td><samp>xirang-ws</samp></td><td>工作区：成员与 <samp>status</samp></td><td>产品怎么组装</td></tr>
-<tr><td><samp>xirang-flow</samp></td><td>编排：叶子 · 装配 · 矩阵</td><td>质量策略</td></tr>
-<tr><td><samp>xirang</samp></td><td>命令行</td><td>用户界面</td></tr>
-</table>
-
-<sub>依赖无环，没有包反向依赖命令行。</sub>
+| <sub>包</sub> | <sub>管什么</sub> | <sub>什么变了会逼它改</sub> |
+| :--: | :--: | :--: |
+| <sub><samp>xirang-core</samp></sub> | <sub>清单 schema · 层叠与求解 · 依赖与锁 · 矩阵派生</sub> | <sub>规范涨版本</sub> |
+| <sub><samp>xirang-gen</samp></sub> | <sub>寄存器图 → BSV / C 头 / 测试台 · 装配 → 顶层</sub> | <sub>目标语言、契约形态</sub> |
+| <sub><samp>xirang-area</samp></sub> | <sub>价目表 · 面积预测 · 回填</sub> | <sub>面积模型</sub> |
+| <sub><samp>xirang-back</samp></sub> | <sub>驱动综合与仿真工具</sub> | <sub>EDA 工具与版本</sub> |
+| <sub><samp>xirang-out</samp></sub> | <sub>六种导出目标与读回</sub> | <sub>别人的格式</sub> |
+| <sub><samp>xirang-ws</samp></sub> | <sub>工作区：成员与 <samp>status</samp></sub> | <sub>产品怎么组装</sub> |
+| <sub><samp>xirang-flow</samp></sub> | <sub>编排：叶子 · 装配 · 矩阵</sub> | <sub>质量策略</sub> |
+| <sub><samp>xirang</samp></sub> | <sub>命令行</sub> | <sub>用户界面</sub> |
 
 </details>
-
 <hr>
 
 ### 本地开发

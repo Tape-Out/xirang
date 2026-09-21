@@ -9,6 +9,7 @@ import sys
 
 import yaml
 
+from xirang_core import diag
 from xirang_core.manifest import GEN_HW, GEN_SW
 from xirang_area import check as area_check
 from xirang_area.price import ASM_BAND, annotate, model_note, stale
@@ -79,11 +80,34 @@ def cmd_config(args) -> int:
     return 0
 
 
+def _why_check(res: Resolved, pkgs, code: str) -> int:
+    """一道检查此刻是哪一级，以及这一级从哪来。与旋钮取值同一个面板。"""
+    c = diag.CHECKS[code]
+    layers = [("包 ip.yaml", (pkgs[res.top].ip.get("diagnostics") if res.top in pkgs else None))]
+    lv, why = diag.resolve(code, layers)
+    print(f"{BOLD}{code}{OFF} = {BOLD}{lv.name}{OFF}"
+          f"   {'挡住动作' if diag.blocks(lv) else '只报不挡'}")
+    print()
+    print(f"  拦下什么：{c.what}")
+    print()
+    print("  层叠（低到高，越靠下越优先）：")
+    print(f"    {'✔ ' if why == '默认' else '  '}默认        {c.level.name}")
+    for src, over in layers:
+        got = diag.level_of((over or {}).get(code))
+        mark = "✔ " if (got is not None and why == src) else "  "
+        print(f"    {mark}{src:<11} {got.name if got is not None else '—'}")
+    print()
+    print(f"  {DIM}工作区、装配与单条链接三层还没接上{OFF}")
+    return 0
+
+
 def _why(res: Resolved, pkgs, path: str) -> int:
     """CSS 那种 computed 面板：一条属性的完整来历。"""
+    if path.upper() in diag.CHECKS:
+        return _why_check(res, pkgs, path.upper())
     hit = res.find(path)
     if not hit:
-        print(f"没有 {path}", file=sys.stderr)
+        print(f"没有 {path}——旋钮写 gpio0.numPins，检查号写 XR-AREA-003", file=sys.stderr)
         return 1
     inst, v = hit
     pkg = pkgs[inst.of]
@@ -537,7 +561,7 @@ def main(argv=None) -> int:
         p.add_argument("-s", "--set", action="append", help="覆盖旋钮，如 -s numPins=8")
 
     c = sub.add_parser("config", help="computed 面板")
-    common(c); c.add_argument("--why", help="单条旋钮的来历，如 gpio0.numPins")
+    common(c); c.add_argument("--why", help="一条旋钮或一道检查的来历，如 gpio0.numPins、XR-AREA-003")
     c.set_defaults(fn=cmd_config)
 
     t = sub.add_parser("tree", help="装配层次")

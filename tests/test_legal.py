@@ -69,7 +69,7 @@ def main() -> int:
     if rs[0]["fields"][0]["legal"] != [(0, ("funcs", -1), None)]:
         bad.append(f"「参数 - 1」没留成符号：{rs[0]['fields'][0]['legal']}")
 
-    mpp = [(3, 3, None), (0, 1, "smode")]
+    mpp = [(3, 3, None), (0, 1, ("smode", None))]
     on, off = {"smode": True}.get, {}.get
     for v, want_on, want_off in ((0, True, False), (2, False, False), (3, True, True)):
         if legal_at(mpp, v, on) != want_on or legal_at(mpp, v, off) != want_off:

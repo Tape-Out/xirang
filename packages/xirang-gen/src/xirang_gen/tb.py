@@ -16,7 +16,9 @@
 import copy
 
 from xirang_core.manifest import Bad, Pkg
-from xirang_gen.regmap import _BOUND, _cap, _rows, _sig, legal_at
+from xirang_gen.regmap import (_BOUND, _cap, _rows, _sig, feat_refs,
+                               feat_on, legal_at)
+from xirang_gen.wrap import _lit
 
 
 def _mask(f) -> int:
@@ -55,7 +57,7 @@ def regs_tb(pkg: Pkg, vals, suffix: str = "") -> str:
         # 数组与宽寄存器的地址是算出来的，第一版只测标量
         if reg["arr"] or reg["rw"] > dw:
             continue
-        if reg["feat"] and not feats.get(reg["feat"], False):
+        if reg["feat"] and not feat_on(reg["feat"], feats.get(reg["feat"][0])):
             # 特性关掉：整个寄存器应当读回零
             cases.append((reg["offset"], 0, 0, f"{reg['name']} (feature off)"))
             continue
@@ -64,7 +66,7 @@ def regs_tb(pkg: Pkg, vals, suffix: str = "") -> str:
             if str(f["w"]).isdigit() is False:
                 wr = None
                 break
-            on = (not f["feat"]) or feats.get(f["feat"], False)
+            on = (not f["feat"]) or feat_on(f["feat"], feats.get(f["feat"][0]))
             keep = (f["sw"] in ("rw", "w") and not f["vol"] and not f["woclr"]
                     and f["sw"] != "w")
             # sw: w 的字段读回零；woclr 写一即清；volatile 由硬件驱动
@@ -87,12 +89,12 @@ def regs_tb(pkg: Pkg, vals, suffix: str = "") -> str:
     for reg in rs:
         if reg["arr"] or reg["rw"] > dw:
             continue
-        if reg["feat"] and not feats.get(reg["feat"], False):
+        if reg["feat"] and not feat_on(reg["feat"], feats.get(reg["feat"][0])):
             continue
         for f in reg["fields"]:
             if not f["hwset"] or not str(f["w"]).isdigit():
                 continue
-            if f["feat"] and not feats.get(f["feat"], False):
+            if f["feat"] and not feat_on(f["feat"], feats.get(f["feat"][0])):
                 continue
             m = _mask(f)
             # woclr 是写一清零，其余可写字段是写零清零
@@ -105,16 +107,16 @@ def regs_tb(pkg: Pkg, vals, suffix: str = "") -> str:
     for reg in rs:
         if reg["arr"] or reg["rw"] > dw or reg["alias"]:
             continue
-        if reg["feat"] and not feats.get(reg["feat"], False):
+        if reg["feat"] and not feat_on(reg["feat"], feats.get(reg["feat"][0])):
             continue
         for f in reg["fields"]:
             if f["legal"] is None or f["sw"] != "rw" or not str(f["w"]).isdigit():
                 continue
-            if f["feat"] and not feats.get(f["feat"], False):
+            if f["feat"] and not feat_on(f["feat"], feats.get(f["feat"][0])):
                 continue
             top = (1 << int(f["w"])) - 1
             for lo, hi, ft in f["legal"]:
-                if ft and not feats.get(ft, False):
+                if ft and not feat_on(ft, feats.get(ft[0])):
                     continue
                 for good, bad in ((hi, hi + 1), (lo, lo - 1)):
                     row = (reg["offset"], good << f["lo"], bad << f["lo"], _mask(f),
@@ -142,10 +144,8 @@ def regs_tb(pkg: Pkg, vals, suffix: str = "") -> str:
                     f"zeros: {dw}'h{want0:0{dw // 4}X} }};   // {name}")
 
     # Cfg 里只有寄存器图真的用到的特性——IP 的其它开关不在寄存器组的视野里
-    used = sorted({f["feat"] for r in rs for f in r["fields"] if f["feat"]}
-                  | {r["feat"] for r in rs if r["feat"]}
-                  | {ft for r in rs for f in r["fields"] for _, _, ft in f["legal"] or [] if ft})
-    args = ", ".join(f"{k}: {'True' if vals[k].value else 'False'}" for k in used)
+    used = feat_refs(rs)
+    args = ", ".join(f"{k}: {_lit(vals[k].value)}" for k in used)
     # 类型参数按**寄存器图**声明的那几个来。IP 还有别的参数（cache 的行数与
     # 行宽只影响实现），寄存器接口里没有它们的位置，照 ip.yaml 填就多出几个。
     rmp = list((pkg.regmap or {}).get("params") or [])

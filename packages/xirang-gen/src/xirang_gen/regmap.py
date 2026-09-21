@@ -98,13 +98,42 @@ def _legal(f, params: list[str], where: str):
         lo, hi = _bound(e["min"], params, where), _bound(e["max"], params, where)
         if isinstance(lo, int) and isinstance(hi, int) and lo > hi:
             raise Bad(f"{where}: legal 区间 min {lo} 大于 max {hi}")
-        out.append((lo, hi, e.get("feature")))
+        out.append((lo, hi, _feat(e.get("feature"), where)))
     return out
+
+
+def _feat(v, where: str):
+    """特性引用：布尔写名字，档位写 {名字: [档...]}。归一成 (名字, 档位或 None)。"""
+    if v is None:
+        return None
+    if isinstance(v, str):
+        return (v, None)
+    if isinstance(v, dict) and len(v) == 1:
+        (nm, vs), = v.items()
+        if (isinstance(vs, list) and vs
+                and all(isinstance(x, int) and not isinstance(x, bool) for x in vs)):
+            return (nm, tuple(vs))
+    raise Bad(f"{where}: feature 写特性名，或 {{名字: [档位...]}}")
+
+
+def feat_on(ref, val) -> bool:
+    """档位落在集合里，或布尔为真。"""
+    _, vs = ref
+    return (val in vs) if vs else bool(val)
+
+
+def feat_gate(ref) -> str:
+    """门控的 BSV 布尔式。加第三种特性只在这里加一条分支。"""
+    nm, vs = ref
+    if vs is None:
+        return f"cfg.{nm}"
+    return "(" + " || ".join(f"cfg.{nm} == {v}" for v in vs) + ")"
 
 
 def legal_at(lg, v: int, on) -> bool:
     """具体值合不合法。on(特性名) 说那个特性开没开；界须已是整数。"""
-    return any(lo <= v <= hi for lo, hi, ft in lg if ft is None or on(ft))
+    return any(lo <= v <= hi for lo, hi, ft in lg
+               if ft is None or feat_on(ft, on(ft[0])))
 
 
 def _legal_bsv(f) -> str:
@@ -123,7 +152,7 @@ def _legal_bsv(f) -> str:
         else:
             t = " && ".join(([f"v >= {b(lo)}"] if lo != 0 else [])
                             + ([f"v <= {b(hi)}"] if hi != top else [])) or "True"
-        terms.append(f"(cfg.{ft} && ({t}))" if ft else f"({t})")
+        terms.append(f"({feat_gate(ft)} && ({t}))" if ft else f"({t})")
     return " || ".join(terms)
 
 
@@ -232,7 +261,7 @@ def _rows(spec: dict, params: list[str], dw: int = 32) -> list[dict]:
                 "sw": f.get("sw", "rw"), "hw": f.get("hw", "na"),
                 "woclr": f.get("onwrite") == "woclr",
                 "hwset": bool(f.get("hwset")), "reset": f.get("reset"),
-                "feat": f.get("feature") or r.get("feature"),
+                "feat": _feat(f.get("feature") or r.get("feature"), r["name"]),
                 "vol": bool(f.get("volatile")),
                 "swacc": bool(f.get("swacc")), "swmod": bool(f.get("swmod")),
                 "wrdata": bool(f.get("wrdata")),
@@ -246,7 +275,7 @@ def _rows(spec: dict, params: list[str], dw: int = 32) -> list[dict]:
         if shaped and not multi and flds[0]["onread"]:
             raise Bad(f"{r['name']}: 位域不从第 0 位起的单字段本版不支持 onread")
         out.append({"name": r["name"], "offset": off, "desc": r.get("desc", ""),
-                    "feat": r.get("feature"), "multi": multi, "shaped": shaped, "fields": flds,
+                    "feat": _feat(r.get("feature"), r["name"]), "multi": multi, "shaped": shaped, "fields": flds,
                     "arr": arr, "rw": int(rw) if rw else dw,
                     "atomic": r.get("atomic"), "alias": r.get("alias")})
 
@@ -287,15 +316,26 @@ def _sig(reg, f) -> str:
     return f"{reg['name']}_{f['name']}"
 
 
+def feat_refs(rs) -> dict[str, tuple | None]:
+    """寄存器图引用到的特性 -> 档位（布尔特性是 None）。同名两种写法当场报。"""
+    seen: dict[str, tuple | None] = {}
+    for r in rs:
+        for ref in ([r["feat"]] + [f["feat"] for f in r["fields"]]
+                    + [ft for f in r["fields"] for _, _, ft in f["legal"] or []]):
+            if ref is None:
+                continue
+            if seen.setdefault(ref[0], ref[1]) != ref[1]:
+                raise Bad(f"特性 {ref[0]} 在 regmap.yaml 里两种写法对不上")
+    return dict(sorted(seen.items()))
+
+
 def bsv(pkg: Pkg) -> str:
     spec = pkg.regmap
     ip = spec.get("ip", pkg.name)
     params: list[str] = list(spec.get("params") or [])
     dw_i = int((spec.get("contract") or {}).get("dw", 32))
     rs = _rows(spec, params, dw_i)
-    feats = sorted({f["feat"] for r in rs for f in r["fields"] if f["feat"]}
-                   | {r["feat"] for r in rs if r["feat"]}
-                   | {ft for r in rs for f in r["fields"] for _, _, ft in f["legal"] or [] if ft})
+    feats = feat_refs(rs)
     tparams = ", ".join(["numeric type aw", "numeric type dw"]
                         + [f"numeric type {p}" for p in params])
     targs = ", ".join(["aw", "dw"] + params)
@@ -339,7 +379,7 @@ def bsv(pkg: Pkg) -> str:
                     "import RegIf::*;", "import Vector::*;", ""]
     if feats:
         L.append("typedef struct {")
-        L += [f"  Bool {f};" for f in feats]
+        L += [f"  {'Integer' if v else 'Bool'} {f};" for f, v in feats.items()]
         L += [f"}} {C}RegsCfg;", ""]
 
     L.append(f"interface {C}RegsIfc#({tparams});")
@@ -491,7 +531,7 @@ def bsv(pkg: Pkg) -> str:
         e = f"(zeroExtend({port(reg, f, 1, ix)}) << {f['lo']})"
         # 字段级 feature：关掉时该位读回 0，寄存器随之被优化掉
         if f["feat"] and f["feat"] != reg["feat"]:
-            return f"(cfg.{f['feat']} ? {e} : 0)"
+            return f"({feat_gate(f['feat'])} ? {e} : 0)"
         return e
 
     def read_expr(reg, ix=""):
@@ -547,7 +587,7 @@ def bsv(pkg: Pkg) -> str:
         # 特性关掉的数组要跟标量一样整个消失。这条路径原来根本没查 feature，
         # 于是 rtc 的 alarm、aclint 的 ssip 在特性关掉时照样能读能写——
         # 而一致性测试只走标量寄存器，正好看不见。
-        gate = f" && cfg.{reg['feat']}" if reg["feat"] else ""
+        gate = f" && {feat_gate(reg['feat'])}" if reg["feat"] else ""
         wide = aw + 8
         L += [f"      if (offw >= {wide}'h{base:0{hexw}X} && "
               f"offw < {wide}'h{base:0{hexw}X} + {span}{inElem}{gate}) begin",
@@ -574,7 +614,7 @@ def bsv(pkg: Pkg) -> str:
                     if g["legal"] is not None:
                         asn = f"if (legal_{_sig(reg, g)}(nw[{g['hi']}:{g['lo']}])) {asn}"
                     if g["feat"] and g["feat"] != reg["feat"]:
-                        L.append(f"          if (cfg.{g['feat']}) {asn}")
+                        L.append(f"          if ({feat_gate(g['feat'])}) {asn}")
                     else:
                         L.append(f"          {asn}")
                 if g["swmod"]:
@@ -690,7 +730,7 @@ def bsv(pkg: Pkg) -> str:
                     if f["legal"] is not None:
                         asn = f"if (legal_{_sig(src, f)}(nw[{f['hi']}:{f['lo']}])) {asn}"
                     if f["feat"] and f["feat"] != reg["feat"]:
-                        body.append(f"  if (cfg.{f['feat']}) {asn}")
+                        body.append(f"  if ({feat_gate(f['feat'])}) {asn}")
                     else:
                         body.append(f"  {asn}")
                 if f["swmod"]:
@@ -746,7 +786,7 @@ def bsv(pkg: Pkg) -> str:
                 body.append(f"if (!r.write) {_sig(src, f)}_acc.send();")
         arm = "\n               ".join(body)
         if reg["feat"]:
-            L += [f"        {aw}'h{reg['offset']:0{hexw}X}: if (cfg.{reg['feat']}) begin",
+            L += [f"        {aw}'h{reg['offset']:0{hexw}X}: if ({feat_gate(reg['feat'])}) begin",
                   "                 err = False;",
                   f"                 {arm}", "               end else err = True;"]
         else:

@@ -45,7 +45,7 @@ $ ran export soc-mcu -f rdl        # 寄存器图导成 SystemRDL
 ```
 
 <details>
-<summary><sub><b>旋钮的来历答得出</b>，测试矩阵由旋钮派生 — 点开看输出</sub></summary>
+<summary><sub>配置来历与矩阵输出</sub></summary>
 
 ```console
 $ ran config soc-mcu --why gpiob.numPins
@@ -76,7 +76,7 @@ emac  矩阵 7 点
 </table>
 
 <details>
-<summary><sub>一个叶子 IP 与一颗装配长什么样 — 点开</sub></summary>
+<summary><sub>清单样例</sub></summary>
 
 ```yaml
 name: uart
@@ -110,29 +110,24 @@ deps: { hwcore: ^0.1, amba: ^0.1 }
 
 ### 导出目标
 
-别人的格式一律是导出目标，不在执行路径上。
-
-<table>
+<table align="center">
 <tr>
-<td width="110"><samp>rdl</samp></td><td width="300">SystemRDL 2.0，整条 PeakRDL 生态的入口</td>
-<td width="110"><samp>kconfig</samp></td><td>嵌套菜单，有回程</td>
+<td align="right"><samp>rdl</samp></td><td><sub>SystemRDL 2.0</sub></td>
+<td align="right"><samp>core</samp></td><td><sub>FuseSoC CAPI2</sub></td>
+<td align="right"><samp>resolved</samp></td><td><sub>解出的配置与来历</sub></td>
 </tr>
 <tr>
-<td><samp>ipxact</samp></td><td>IP-XACT（IEEE 1685-2014）寄存器视图</td>
-<td><samp>resolved</samp></td><td>解出来的配置与来历</td>
-</tr>
-<tr>
-<td><samp>core</samp></td><td>FuseSoC CAPI2，上游直接吃</td>
-<td><samp>tar</samp></td><td>零工具依赖，解开只要 <samp>bsc</samp></td>
+<td align="right"><samp>ipxact</samp></td><td><sub>IP-XACT 1685</sub></td>
+<td align="right"><samp>kconfig</samp></td><td><sub>menuconfig 菜单</sub></td>
+<td align="right"><samp>tar</samp></td><td><sub>自足源码包</sub></td>
 </tr>
 </table>
-
 <hr>
 
 ### 门禁清单
 
 <details>
-<summary><sub>推之前 <samp>ran status</samp>、<samp>ran lint</samp> 与 <samp>ran test</samp> 拦下的十件事 — 点开</sub></summary>
+<summary><sub>十道门禁</sub></summary>
 
 <br>
 
@@ -156,7 +151,7 @@ deps: { hwcore: ^0.1, amba: ^0.1 }
 ### 子包说明
 
 <details>
-<summary><sub>八个包各管一件事，分包的理由是<b>什么变了会逼它改</b> — 点开</sub></summary>
+<summary><sub>八个包，与各自的改动来源</sub></summary>
 
 <br>
 
@@ -171,7 +166,7 @@ deps: { hwcore: ^0.1, amba: ^0.1 }
 <tr><td><samp>xirang</samp></td><td>命令行</td><td>用户界面</td></tr>
 </table>
 
-<sub>依赖无环，<samp>xirang-core</samp> 与 <samp>xirang-back</samp> 在底，没有包反向依赖命令行。</sub>
+<sub>依赖无环，没有包反向依赖命令行。</sub>
 
 </details>
 
@@ -184,17 +179,11 @@ $ git clone --recurse-submodules https://github.com/Tape-Out/xirang && cd xirang
 $ uv sync --all-packages && uv run pytest -q && uv run ruff check .
 ```
 
-模板仓 [`xrskel`](https://github.com/Tape-Out/xrskel) 以子模块挂在包内，`ran new` 运行时零网络零 git；发版时自动跟到它的最新一版。
-
 <hr>
 
 ### 相关项目
 
-[`spec`](https://github.com/Tape-Out/spec) 规范 ·
-[`xrskel`](https://github.com/Tape-Out/xrskel) 模板 ·
-[`bsc`](https://github.com/B-Lang-org/bsc) 编译器 ·
-[`fusesoc`](https://github.com/olofk/fusesoc) 这个仓的历史始于它的一份 fork
-
+[`spec`](https://github.com/Tape-Out/spec) 规范 · [`xrskel`](https://github.com/Tape-Out/xrskel) 模板
 <hr>
 
 ### 许可证

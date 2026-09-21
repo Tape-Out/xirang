@@ -54,7 +54,9 @@ def digest(pkg: Pkg) -> str:
     rm = pkg.root / "regmap.yaml"
     if rm.exists():
         files.append(rm)
-    for d in ("bsv", "bh", "rtl", "src"):
+    # 与清单里声明的目录对齐。**改这个集合会让全组织的摘要失效**——
+    # 2026-09-21 改名那次就是这样，四颗装配全部重锁
+    for d in ("hwsrc", "swsrc", "rtl", "src"):
         p = pkg.root / d
         if p.is_dir():
             files += sorted(p.rglob("*"))

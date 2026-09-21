@@ -51,10 +51,12 @@ mkD = module
 def dead(files: dict[str, str]) -> list[str]:
     with tempfile.TemporaryDirectory() as d:
         root = pathlib.Path(d)
-        (root / "bsv").mkdir()
+        (root / "hwsrc").mkdir()
         for name, src in files.items():
-            (root / "bsv" / name).write_text(src, encoding="utf-8")
-        return dead_inputs(SimpleNamespace(root=root, ip={}))
+            (root / "hwsrc" / name).write_text(src, encoding="utf-8")
+        # 假包也得会答「源码在哪」——这一问现在由清单声明，缺省是同名目录
+        return dead_inputs(SimpleNamespace(root=root, ip={},
+                                           dirs=lambda k: [root / k]))
 
 
 def main() -> int:

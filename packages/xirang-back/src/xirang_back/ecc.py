@@ -67,15 +67,16 @@ def _run(cmd, cwd=None, env=None):
 
 
 def bsv_to_verilog(out: pathlib.Path, top: str, src_dirs: list[str],
+                   gen: str = "hwsrc",
                    top_src: pathlib.Path | None = None) -> pathlib.Path | None:
     """把 out/bsv 连同额外源目录一起编成 Verilog。"""
     rtl = out / "rtl"
     build = out / ".bsc"
     rtl.mkdir(parents=True, exist_ok=True)
     build.mkdir(parents=True, exist_ok=True)
-    path = ":".join([str(out / "bsv"), *src_dirs]) + ":+"
+    path = ":".join([str(out / gen), *src_dirs]) + ":+"
     if top_src is None:
-        srcs = sorted((out / "bsv").glob("*.bsv"))
+        srcs = sorted((out / gen).glob("*.bsv"))
         top_src = next((s for s in srcs if s.stem.endswith("Pkg")), None)
     if top_src is None:
         return None
@@ -116,8 +117,11 @@ def _pull_bsc_libs(rtl: pathlib.Path):
 
 def synth(out: pathlib.Path, top: str, name: str,
           extra_src: list[str] | None = None,
-          top_src: pathlib.Path | None = None) -> float | None:
-    rtl = bsv_to_verilog(out, top, extra_src or [], top_src)
+          top_src: pathlib.Path | None = None,
+          gen: str = "hwsrc") -> float | None:
+    """`gen` 是生成产物在 out 下的目录名。由调用方给——这一层只驱动外部工具，
+    不认识我们的数据模型（test_structure 守的就是这条）。"""
+    rtl = bsv_to_verilog(out, top, extra_src or [], gen, top_src)
     if rtl is None:
         return None
     _pull_bsc_libs(rtl)

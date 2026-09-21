@@ -225,9 +225,10 @@ def gen_digest(pkg: Pkg) -> str | None:
     # 手写的源码也要进摘要。只看生成物的话，改了 IP 自己的逻辑（uart 的取数、
     # spi 的采样、timer 的比较）面积明明变了却没人报警——那正是这套机制
     # 当初要防的「悄悄失效」。
-    src = pkg.root / "bsv"
-    if src.is_dir():
-        for f in sorted(list(src.glob("*.bsv")) + list(src.glob("*.bs"))):
+    for src in pkg.dirs("hwsrc"):
+        if not src.is_dir():
+            continue
+        for f in sorted(list(src.rglob("*.bsv")) + list(src.rglob("*.bs"))):
             parts.append(f.read_text(encoding="utf-8"))
     if not parts:
         return None

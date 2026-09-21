@@ -54,9 +54,25 @@ LANGS = {"bsv", "bh", "verilog", "sv", "vhdl", "chisel", "spinal"}
 SRC_EXT = {"bsv": ".bsv", "bh": ".bs", "verilog": ".v", "sv": ".sv",
            "vhdl": ".vhd", "chisel": ".scala", "spinal": ".scala"}
 
+# 源码与测试住在哪：键名与目录同名，缺省就是那个同名目录（`hwsrc: [hwsrc]`）。
+# 不写死目录名，是因为规范对语言开放、黑盒的源码可能在别处、三个操作系统还可能各要各的文件——
+# 三件事落在同一个机制上，比散着写死三处强。
+DIR_KEYS = ("hwsrc", "swsrc", "htest", "stest")
+
+# 生成产物在 build 下的目录名。与包里的源码目录不是一回事：那边由用户声明，
+# 这边不归用户管——但名字要与内容相称，且只此一处，将来要改只改这里。
+GEN_HW = "hwsrc"
+GEN_SW = "sw"
+GEN_TEST = "htest"
+
+# `when` 认的平台名。不认识的值要报错：写 `when: win` 而被默默忽略，
+# 比写错键更难查——那一条会在所有平台上都生效。
+PLATS = {"linux", "macos", "windows"}
+
 # 顶层键的白名单。写错一个键就被默默忽略，比报错糟得多——
 # 「area」写成「areas」，价目表整个失效而没人知道。
-TOP_KEYS = {"name", "version", "spec", "kind", "lang", "identity", "contract",
+TOP_KEYS = {*DIR_KEYS,
+            "name", "version", "spec", "kind", "lang", "identity", "contract",
             "params", "features", "constraints", "area", "emit", "deps",
             "bus", "instances", "connect", "pipe", "test", "__path__"}
 
@@ -99,17 +115,72 @@ class Pkg:
     def is_assembly(self) -> bool:
         return bool(self.ip.get("instances"))
 
+    def dirs(self, key: str, plat: str | None = None) -> list[pathlib.Path]:
+        """某一类源码/测试的位置。缺省是与键同名的目录；只返回真实存在的。
+
+        返回顺序照清单写的顺序——搜索路径的先后是有意义的，不排序。
+        """
+        return [self.root / e for e, _ in self._entries(key, plat)
+                if (self.root / e).exists()]
+
+    def dir_why(self, key: str, plat: str | None = None) -> list[tuple[str, str]]:
+        """每个位置是怎么来的：`约定` 还是 `ip.yaml 声明`。给 config --why 用。"""
+        return self._entries(key, plat)
+
+    def _entries(self, key: str, plat: str | None = None) -> list[tuple[str, str]]:
+        import platform as _p
+        assert key in DIR_KEYS, key
+        cur = plat or {"Linux": "linux", "Darwin": "macos",
+                       "Windows": "windows"}.get(_p.system(), "linux")
+        raw = self.ip.get(key)
+        if raw is None:
+            return [(key, "约定")]
+        out = []
+        for e in raw:
+            if isinstance(e, str):
+                out.append((e, f"{self.path} 的 {key}"))
+                continue
+            when = e.get("when")
+            if when is not None and when not in PLATS:
+                raise Bad(f"{self.path}: {key} 里 when 写的是 {when!r}，"
+                          f"只认 {sorted(PLATS)}")
+            if when in (None, cur):
+                out.append((e["path"], f"{self.path} 的 {key}"
+                                       + (f"（{when} 专用）" if when else "")))
+        return out
+
+    def _check_dirs(self):
+        for k in DIR_KEYS:
+            raw = self.ip.get(k)
+            if raw is None:
+                continue
+            if not isinstance(raw, list):
+                raise Bad(f"{self.path}: {k} 应是列表")
+            for e in raw:
+                if isinstance(e, str):
+                    continue
+                if not isinstance(e, dict) or "path" not in e:
+                    raise Bad(f"{self.path}: {k} 的每一条要么是路径，"
+                              f"要么是带 path 的表，现在是 {e!r}")
+                if extra := set(e) - {"path", "when"}:
+                    raise Bad(f"{self.path}: {k} 里不认识的键 {sorted(extra)}")
+            # 声明了就得真的在。写了个不存在的路径而被默默跳过，等于这条声明没写
+            for d, _ in self._entries(k):
+                if not (self.root / d).exists():
+                    raise Bad(f"{self.path}: {k} 指向的 {d} 不在树上")
+
     def _check_lang(self, langs: list[str]):
         """声明哪种语言就得真的写哪种。
 
         `lang: bh` 配一棵全是 `.bsv` 的树，此前一路放行——**认识的键被默默忽略，
         比不认识的键更难查**：读清单的人会照着去找 `.bs`，找不到才知道被骗。
         """
-        src = self.root / "bsv"
-        if not src.is_dir():
+        srcs = [d for d in self.dirs("hwsrc") if d.is_dir()]
+        if not srcs:
             return
         want = {SRC_EXT[x] for x in langs if x in SRC_EXT}
-        have = {f.suffix for f in src.iterdir() if f.is_file()} & set(SRC_EXT.values())
+        have = {f.suffix for d in srcs for f in d.rglob("*") if f.is_file()}
+        have &= set(SRC_EXT.values())
         if not have:
             return
         if extra := have - want:
@@ -129,6 +200,7 @@ class Pkg:
         bad = set(langs) - LANGS
         if bad:
             raise Bad(f"{self.path}: 不认识的 lang {sorted(bad)}")
+        self._check_dirs()
         self._check_lang(langs)
         for k in ("name", "version", "spec"):
             if k not in ip:

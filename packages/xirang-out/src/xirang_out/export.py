@@ -16,6 +16,7 @@ import yaml
 
 from collections.abc import Iterator
 
+from xirang_core.manifest import GEN_HW
 from xirang_core.model import Instance, Resolved
 
 
@@ -150,9 +151,9 @@ VDIR ?= rtl
 
 all: $(VDIR)/$(TOP).v
 
-$(VDIR)/$(TOP).v: $(wildcard bsv/*.bsv)
+$(VDIR)/$(TOP).v: $(wildcard hwsrc/*.bsv)
 \tmkdir -p $(VDIR) build
-\t$(BSC) -verilog -u -vdir $(VDIR) -bdir build -info-dir build -p bsv:+ -g $(TOP) bsv/{topsrc}
+\t$(BSC) -verilog -u -vdir $(VDIR) -bdir build -info-dir build -p hwsrc:+ -g $(TOP) hwsrc/{topsrc}
 
 clean:
 \trm -rf $(VDIR) build
@@ -166,18 +167,18 @@ def to_tar(res: Resolved, pkgs, build_dir: pathlib.Path, out: pathlib.Path,
     """零工具依赖的包。判据是：解开之后只要 bsc 就能重跑，不需要 xirang。"""
     n = 0
     with tarfile.open(out, "w:gz") as tf:
-        for f in sorted((build_dir / "bsv").glob("*.bsv")):
-            tf.add(f, arcname=f"{res.top}/bsv/{f.name}")
+        for f in sorted((build_dir / GEN_HW).glob("*.bsv")):
+            tf.add(f, arcname=f"{res.top}/{GEN_HW}/{f.name}")
             n += 1
         for name in sorted({i.of for _, i in res.walk()}) + [res.top]:
             p = pkgs.get(name)
             if not p:
                 continue
-            src = p.root / "bsv"
+            src = next(iter(p.dirs("hwsrc")), p.root / GEN_HW)
             if src.is_dir():
                 for f in sorted(list(src.glob("*.bsv"))
                                 + list(src.glob("*.bs"))):
-                    tf.add(f, arcname=f"{res.top}/bsv/{f.name}")
+                    tf.add(f, arcname=f"{res.top}/{GEN_HW}/{f.name}")
                     n += 1
             for m in ("ip.yaml", "regmap.yaml"):
                 q = p.root / m

@@ -8,7 +8,7 @@ requires-python = ">=3.14"
 dependencies = ["xirang"]
 
 [dependency-groups]
-dev = ["ruff>=0.14"]
+dev = ["ruff>=0.14", "pytest>=8"]
 
 [tool.uv]
 package = false

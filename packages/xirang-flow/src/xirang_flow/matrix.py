@@ -12,7 +12,7 @@ import sys
 
 from xirang_area.check import flat_param, uncosted, unmeasured
 from xirang_back.sim import schedule, sim
-from xirang_core.manifest import Bad, Pkg
+from xirang_core.manifest import GEN_HW, GEN_SW, GEN_TEST, Bad, Pkg
 from xirang_core.matrix import points
 from xirang_core.resolve import resolve_pkg
 from xirang_gen.check import dead_inputs, no_overlap, unused_methods
@@ -25,7 +25,7 @@ from .report import Mark, Matrix, Row
 
 
 def tb_gens(pkg: Pkg) -> list[pathlib.Path]:
-    d = pkg.root / "tb"
+    d = next((x for x in pkg.dirs("htest") if x.is_dir()), pkg.root / GEN_TEST)
     return sorted(d.glob("mk*.py")) if d.is_dir() else []
 
 
@@ -60,22 +60,22 @@ def run(pkg: Pkg, index: dict[str, Pkg], *, out: pathlib.Path,
         self_tb: bool = True) -> Matrix:
     if out.exists() and clean:
         shutil.rmtree(out)
-    (out / "bsv").mkdir(parents=True, exist_ok=True)
+    (out / GEN_HW).mkdir(parents=True, exist_ok=True)
     (out / "sw").mkdir(parents=True, exist_ok=True)
     # 寄存器组本身不随配置变——配置是例化时给的，所以只生成一次
     if pkg.regmap:
-        gen_regmap(pkg, out / "bsv", out / "sw")
-    src = [str(q.root / "bsv") for q in index.values() if (q.root / "bsv").exists()]
+        gen_regmap(pkg, out / GEN_HW, out / GEN_SW)
+    src = [str(d) for q in index.values() for d in q.dirs("hwsrc")]
     work = out / "b"
     work.mkdir(parents=True, exist_ok=True)
-    has_bsv = (pkg.root / "bsv").is_dir()
+    has_bsv = any(d.is_dir() for d in pkg.dirs("hwsrc"))
     cap = pkg.name[:1].upper() + pkg.name[1:]
 
     rep = Matrix(name=pkg.name)
     rep.problems = (flat_param(pkg) + uncosted(pkg) + unmeasured(pkg) + dead_inputs(pkg)
                     + no_overlap(pkg))
     if pkg.regmap:
-        rep.problems += unused_methods(pkg, out / "bsv" / f"{cap}Regs.bsv")
+        rep.problems += unused_methods(pkg, out / GEN_HW / f"{cap}Regs.bsv")
     if rep.problems:
         return rep
 
@@ -110,12 +110,12 @@ def run(pkg: Pkg, index: dict[str, Pkg], *, out: pathlib.Path,
 
         if has_bsv:
             ran += 1
-            f = out / "bsv" / f"{cap}Bare{lbl}.bsv"
+            f = out / GEN_HW / f"{cap}Bare{lbl}.bsv"
             f.write_text(neutral(pkg, vals, lbl), encoding="utf-8")
             nums = [str(vals[k].value) for k, d in pkg.knobs().items()
                     if d["kind"] == "param"]
             top = f"mk{cap}Bare{lbl}_{'_'.join(nums) if nums else '0'}"
-            path = ":".join([str(out / "bsv"), *src]) + ":+"
+            path = ":".join([str(out / GEN_HW), *src]) + ":+"
             ok, hits, log = schedule(top, f, path, work)
             if not ok:
                 bad = True
@@ -126,16 +126,16 @@ def run(pkg: Pkg, index: dict[str, Pkg], *, out: pathlib.Path,
             ran += 1
             txt = regs_tb(pkg, vals, lbl)
             if txt:
-                f = out / "bsv" / f"{cap}RegsTb{lbl}.bsv"
+                f = out / GEN_HW / f"{cap}RegsTb{lbl}.bsv"
                 f.write_text(txt, encoding="utf-8")
-                path = ":".join([str(out / "bsv"), *src]) + ":+"
+                path = ":".join([str(out / GEN_HW), *src]) + ":+"
                 ok, o = sim(f"mk{cap}RegsTb{lbl}", f, path, work)
                 if not ok:
                     bad = True
                     notes.append("寄存器：" + tail(o))
 
         if tb_gens(pkg) and self_tb:
-            d = out / "tb" / lbl
+            d = out / GEN_TEST / lbl
             if err := run_gens(pkg, d, lbl, knobs):
                 bad = True
                 notes.append(err)
@@ -145,7 +145,7 @@ def run(pkg: Pkg, index: dict[str, Pkg], *, out: pathlib.Path,
                     notes.append(f"行为测试与 {tbseen[dg]} 逐字节相同，不重跑")
                 else:
                     tbseen[dg] = lbl
-                    path = ":".join([str(out / "bsv"), str(d), *src]) + ":+"
+                    path = ":".join([str(out / GEN_HW), str(d), *src]) + ":+"
                     for f in sorted(d.glob("*Tb.bsv")):
                         ok, o = sim(f"mk{f.stem}", f, path, work)
                         if not ok:

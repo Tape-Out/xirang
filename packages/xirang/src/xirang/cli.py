@@ -9,6 +9,7 @@ import sys
 
 import yaml
 
+from xirang_core.manifest import GEN_HW, GEN_SW
 from xirang_area import check as area_check
 from xirang_area.price import ASM_BAND, annotate, model_note, stale
 from xirang_area.recal import init as do_init
@@ -183,9 +184,9 @@ def cmd_gen(args) -> int:
     if not pkg.regmap:
         raise Bad(f"{args.top} 没有 regmap.yaml，没什么可生成的")
     out = pathlib.Path(args.out or "gen")
-    (out / "bsv").mkdir(parents=True, exist_ok=True)
+    (out / GEN_HW).mkdir(parents=True, exist_ok=True)
     (out / "sw").mkdir(parents=True, exist_ok=True)
-    gen_regmap(pkg, out / "bsv", out / "sw")
+    gen_regmap(pkg, out / GEN_HW, out / GEN_SW)
     if getattr(args, "tb", False):
         cli = {}
         for kv in args.set or []:
@@ -195,10 +196,10 @@ def cmd_gen(args) -> int:
         cap = (pkg.regmap.get("ip", pkg.name))[:1].upper()             + (pkg.regmap.get("ip", pkg.name))[1:]
         txt = regs_tb(pkg, vals)
         if txt:
-            (out / "bsv" / f"{cap}RegsTb.bsv").write_text(txt, encoding="utf-8")
+            (out / GEN_HW / f"{cap}RegsTb.bsv").write_text(txt, encoding="utf-8")
         else:
             print("  （寄存器全是数组或宽寄存器，本版的一致性测试测不了）")
-    for p in sorted((out / "bsv").glob("*.bsv")) + sorted((out / "sw").glob("*")):
+    for p in sorted((out / GEN_HW).glob("*.bsv")) + sorted((out / GEN_SW).glob("*")):
         print(f"  {p}")
     return 0
 
@@ -247,7 +248,7 @@ def cmd_export(args) -> int:
     if fmt == "tar":
         # tar 要有生成物才装得进去，所以先跑一遍不综合的 build
         build = pathlib.Path(args.build or "build").resolve()
-        if not (build / "bsv").is_dir():
+        if not (build / GEN_HW).is_dir():
             raise Bad(f"{build} 里没有生成物——先跑一次 xirang build --no-synth")
         top_mod = "mk" + "".join(w.capitalize()
                                  for w in res.top.replace("-", "_").split("_"))
@@ -374,18 +375,18 @@ def cmd_build(args) -> int:
             return 1
 
     out = pathlib.Path(args.out or "build").resolve()
-    (out / "bsv").mkdir(parents=True, exist_ok=True)
+    (out / GEN_HW).mkdir(parents=True, exist_ok=True)
     (out / "sw").mkdir(parents=True, exist_ok=True)
 
     # 1 每个用到的包，从 regmap.yaml 生成寄存器组
     for name in sorted({i.of for _, i in res.walk()}):
         p = pkgs[name]
         if p.regmap:
-            gen_regmap(p, out / "bsv", out / "sw")
+            gen_regmap(p, out / GEN_HW, out / GEN_SW)
 
     # 2 装配出顶层
     top_mod = "".join(w.capitalize() for w in res.top.replace("-", "_").split("_"))
-    (out / "bsv" / f"{top_mod}Pkg.bsv").write_text(
+    (out / GEN_HW / f"{top_mod}Pkg.bsv").write_text(
         assemble(res, pkgs, top_mod), encoding="utf-8")
 
     # 3 地址图与解析结果落盘
@@ -399,13 +400,15 @@ def cmd_build(args) -> int:
     if args.no_synth:
         print("  (--no-synth，跳过综合)")
         return 0
-    # 每个用到的包各自的 bsv/ 都进 bsc 搜索路径
-    src = [str(pkgs[n].root / "bsv") for n in sorted({i.of for _, i in res.walk()})
-           if (pkgs[n].root / "bsv").exists()]
+    # 每个用到的包各自的 hwsrc/ 都进 bsc 搜索路径
+    src = [str(d) for n in sorted({i.of for _, i in res.walk()})
+           for d in pkgs[n].dirs("hwsrc")]
     for p in pkgs.values():                      # 依赖包（hwcore 之类）也带上
-        if (p.root / "bsv").exists() and str(p.root / "bsv") not in src:
-            src.append(str(p.root / "bsv"))
-    got = synth(out, f"mk{top_mod}", res.top, extra_src=src + (args.bsv_path or []))
+        for d in p.dirs("hwsrc"):
+            if str(d) not in src:
+                src.append(str(d))
+    got = synth(out, f"mk{top_mod}", res.top,
+                extra_src=src + (args.bsv_path or []), gen=GEN_HW)
     if got is None:
         print("  综合未跑通", file=sys.stderr)
         return 1
@@ -443,7 +446,7 @@ def cmd_test(args) -> int:
         rep = gate.library(pkg, index, out=out, clean=args.clean)
         print(f"{BOLD}{pkg.name}{OFF}  库包，{len(rep.rows)} 份行为测试")
         if not rep.rows:
-            print("  没有 tb/，只做类型检查")
+            print("  没有 htest/，只做类型检查")
             return 0
         for r in rep.rows:
             print(f"  {r.mark if r.mark is Mark.ok else BOLD + r.mark + OFF}"

@@ -3,7 +3,7 @@ import pathlib
 
 from xirang_area.price import price
 from xirang_back.ecc import synth
-from xirang_core.manifest import Bad, Pkg
+from xirang_core.manifest import GEN_HW, GEN_SW, Bad, Pkg
 from xirang_core.resolve import resolve_pkg
 from xirang_gen.regmap import generate as gen_regmap
 from xirang_gen.wrap import BUSES, flat_emit, neutral, wrap
@@ -25,13 +25,13 @@ def build(pkg: Pkg, index: dict[str, Pkg], *, out: pathlib.Path,
           synthesise: bool = True, extra_src: list[str] | None = None) -> Leaf:
     """扁平顶层就是它独立流片的样子，综合的也是这一层。"""
     vals = resolve_pkg(pkg, {}, f"{pkg.path} (default)", None, overrides or {})
-    (out / "bsv").mkdir(parents=True, exist_ok=True)
+    (out / GEN_HW).mkdir(parents=True, exist_ok=True)
     (out / "sw").mkdir(parents=True, exist_ok=True)
     cap = pkg.name[:1].upper() + pkg.name[1:]
-    src_f = out / "bsv" / (f"{cap}Bare.bsv" if bare else f"{cap}Wrap.bsv")
+    src_f = out / GEN_HW / (f"{cap}Bare.bsv" if bare else f"{cap}Wrap.bsv")
     src_f.write_text((neutral if bare else wrap)(pkg, vals), encoding="utf-8")
     if pkg.regmap:
-        gen_regmap(pkg, out / "bsv", out / "sw")
+        gen_regmap(pkg, out / GEN_HW, out / GEN_SW)
     nums = [str(vals[k].value) for k, d in pkg.knobs().items()
             if d["kind"] == "param"]
     kind = "Bare" if bare else "Wrap"
@@ -51,7 +51,7 @@ def build(pkg: Pkg, index: dict[str, Pkg], *, out: pathlib.Path,
     if not synthesise:
         return rep
     rep.synthesised = True
-    src = [str(p.root / "bsv") for p in index.values() if (p.root / "bsv").exists()]
+    src = [str(d) for p in index.values() for d in p.dirs("hwsrc")]
     rep.got = synth(out, top, pkg.name,
-                    extra_src=src + (extra_src or []), top_src=src_f)
+                    extra_src=src + (extra_src or []), top_src=src_f, gen=GEN_HW)
     return rep

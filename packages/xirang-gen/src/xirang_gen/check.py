@@ -19,12 +19,14 @@ def dead_inputs(pkg: Pkg) -> list[str]:
     与 test.unused、test.noarea 一样双向成立：写进 test.deadread 的名字
     如果其实已经被读了，同样报错——豁免名单不许留着过期的条目。
     """
-    bsv = pkg.root / "bsv"
-    if not bsv.is_dir():
+    srcs = [d for d in pkg.dirs("hwsrc") if d.is_dir()]
+    if not srcs:
         return []
     out: list[str] = []
     dead: list[str] = []
-    for f in sorted(bsv.glob("*.bsv")) + sorted(bsv.glob("*.bs")):
+    files = sorted(f for d in srcs
+                   for f in list(d.rglob("*.bsv")) + list(d.rglob("*.bs")))
+    for f in files:
         src = f.read_text(encoding="utf-8", errors="ignore")
         # 原来只认 BSV 的写法，.bs 里的线一根都看不见。BH 的线是 `x :: Wire t <- mkBypassWire`，
         # 或者先签名、下一行再 `x <- mkDWire 0`；注释是 `--`，写是 `:=`，而 `<=` 在 BH 里是比较、算读
@@ -71,8 +73,8 @@ def unused_methods(pkg: Pkg, gen_file: pathlib.Path) -> list[str]:
     """
     src = "".join(
         f.read_text(encoding="utf-8", errors="ignore")
-        for f in sorted((pkg.root / "bsv").glob("*.bsv"))
-        + sorted((pkg.root / "bsv").glob("*.bs")))
+        for f in sorted(g for d in pkg.dirs("hwsrc")
+                        for g in list(d.rglob("*.bsv")) + list(d.rglob("*.bs"))))
     # 只看本包这一份。输出目录是跨包复用的，通配一扫就把上一个包留下的
     # 寄存器组也算进来，报出一长串别人的方法。
     if not gen_file.is_file():

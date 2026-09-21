@@ -32,7 +32,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 
-from xirang_core.manifest import Bad, Pkg
+from xirang_core.manifest import GEN_HW, Bad, Pkg
 
 from xirang_area.price import gen_digest, price
 
@@ -224,19 +224,21 @@ def _reprobe(pkg: Pkg, doc, area, probe, path, Y, apply: bool, say) -> list[str]
     from xirang_back import ecc
 
     mod = probe.get("module")
-    src = pkg.root / probe.get("src", "tb/Probe.bsv")
+    src = pkg.root / probe.get("src", "htest/Probe.bsv")
     if not mod or not src.exists():
         raise Bad(f"{pkg.name} 的 area.probe 指的模块或文件不在：{mod} {src}")
 
     d = pathlib.Path(tempfile.mkdtemp(prefix="xirang-probe-"))
     try:
-        (d / "bsv").mkdir()
-        srcs = [str(pkg.root / "bsv")]
+        (d / GEN_HW).mkdir()
+        srcs = [str(x) for x in pkg.dirs("hwsrc")]
         for dep in (doc.get("deps") or {}):
-            q = pkg.root.parent / dep / "bsv"
+            # 依赖在同级目录下，这里拿不到它的 Pkg，所以只能按约定找。
+            # 依赖自己声明了别处的源码时，靠装配那条路径（index 里有 Pkg）覆盖
+            q = pkg.root.parent / dep / "hwsrc"
             if q.is_dir():
                 srcs.append(str(q))
-        um2 = ecc.synth(d, mod, pkg.name, extra_src=srcs, top_src=src)
+        um2 = ecc.synth(d, mod, pkg.name, extra_src=srcs, top_src=src, gen=GEN_HW)
     finally:
         shutil.rmtree(d, ignore_errors=True)
     if um2 is None:
@@ -260,7 +262,7 @@ def _reprobe(pkg: Pkg, doc, area, probe, path, Y, apply: bool, say) -> list[str]
         if um2 > old:
             log.append(f"{pkg.name}: 孤立实测已经超过记着的价钱，上界不再成立，要重算")
         elif apply and stamp(pkg):
-            # 核对通过即对着当前源码重新确认了上界；摘要连 bsv/ 下的手写源码也算进去，
+            # 核对通过即对着当前源码重新确认了上界；摘要连 hwsrc/ 下的手写源码也算进去，
             # 这里不盖，库包改了源码就再也盖不回去
             log.append(f"核对通过，重盖摘要 {path}")
         return log
@@ -413,7 +415,7 @@ def lift(pairs) -> float:
 def init(pkg: Pkg, search: list[pathlib.Path], apply: bool, say=print) -> list[str]:
     """没有价目表的新包：照 plan 量一遍、回填曲线、用离格点定余量、盖摘要。
 
-    recal 只会重测已有的实测行，没行就「不必回填」而且不盖摘要，lint 却对每个带 bsv/ 的包
+    recal 只会重测已有的实测行，没行就「不必回填」而且不盖摘要，lint 却对每个带 hwsrc/ 的包
     都要摘要——新包原来没有一条命令过得了这一关，只能手工搓价目表。
     """
     if pkg.is_library or pkg.is_assembly:

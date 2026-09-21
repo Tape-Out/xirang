@@ -1,6 +1,6 @@
 """regmap.yaml -> BSV 寄存器组 + C 头。
 
-规范见 Tape-Out/spec 的 regmap.md。语义内核沿用 SystemRDL 2.0，属性名原样不改。
+规范见 Tape-Out/xrspec 的 regmap.md。语义内核沿用 SystemRDL 2.0，属性名原样不改。
 本版覆盖 gpio 竖切用得到的子集：sw · hw · onwrite(woclr) · hwset · stickybit · reset。
 
 对拍结论（V1）：生成件与手写件时序结构 20/20 逐位一致，行为 5 配置 × 2 万拍零失配。

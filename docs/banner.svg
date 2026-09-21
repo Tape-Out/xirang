@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 374 132"
-     width="374" height="132" role="img" aria-label="息壤 XiRang">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 132"
+     width="520" height="132" role="img" aria-label="息壤 XiRang">
   <title>息壤 · XiRang</title>
-  <g transform="translate(14 14.0) scale(0.101562)">
+  <g transform="translate(6 14.0) scale(0.101562)">
 <defs>
     <linearGradient id="rock" x1="0.1" y1="0" x2="0.9" y2="1">
       <stop offset="0" stop-color="#6D8CB5"/>
@@ -26,8 +26,8 @@
   </g>
   <circle cx="512" cy="512" r="472" fill="none" stroke="#2E3440" stroke-width="6" opacity="0.18"/>
   </g>
-  <text x="140" y="62" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, Noto Sans CJK SC, DejaVu Sans, sans-serif" font-size="42"
-        font-weight="600" fill="#2E3440" letter-spacing="2">息壤</text>
-  <text x="142" y="88" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, Noto Sans CJK SC, DejaVu Sans, sans-serif" font-size="14.5"
+  <text x="132" y="70" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, Noto Sans CJK SC, system-ui, sans-serif" font-size="42" font-weight="600"
+        fill="#2E3440" letter-spacing="2">息壤</text>
+  <text x="134" y="98" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, Noto Sans CJK SC, system-ui, sans-serif" font-size="14.5"
         fill="#6D7A8A">XiRang · 硬件的包管理器与装配器</text>
 </svg>

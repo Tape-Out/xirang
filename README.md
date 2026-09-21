@@ -30,18 +30,17 @@
 $ uv tool install --from 'git+https://github.com/Tape-Out/xirang#subdirectory=packages/xirang' xirang
 ```
 
-长命令 `xirang`，短命令 `ran`。解析与计价只要 Python 3.14；跑矩阵另需 [`bsc`](https://github.com/B-Lang-org/bsc)；量面积再加 `ecc` 与一份 PDK。
-
+<sub>长命令 <samp>xirang</samp>，短命令 <samp>ran</samp>。</sub>
 <hr>
 
 ### 常用命令
 
 ```console
-$ ran new mytimer -t ip/regmap     # 从模板铺一个新仓
-$ ran config uart -s fifoDepth=16  # 每个旋钮的最终取值与合计面积
-$ ran test uart                    # 在整张测试矩阵上验一遍
+$ ran new mytimer -t ip/regmap     # 铺一个新仓
+$ ran config uart -s fifoDepth=16  # 旋钮的最终取值与面积
+$ ran test uart                    # 跑整张测试矩阵
 $ ran build soc-mcu                # 生成并综合
-$ ran export soc-mcu -f rdl        # 寄存器图导成 SystemRDL
+$ ran export soc-mcu -f rdl        # 导成 SystemRDL
 ```
 
 <details>
@@ -63,16 +62,19 @@ emac  矩阵 7 点
 ```
 
 </details>
-
 <hr>
 
 ### 清单格式
 
-<table>
-<tr><td width="150"><samp>ip.yaml</samp></td><td>身份 · 契约 · 旋钮与约束 · 面积价目表 · 依赖；有 <samp>instances</samp> 即为装配</td></tr>
-<tr><td><samp>regmap.yaml</samp></td><td>寄存器与字段，属性名沿用 <b>SystemRDL 2.0</b></td></tr>
-<tr><td><samp>workspace.yaml</samp></td><td>这次流片用到哪些包</td></tr>
-<tr><td><samp>xirang.lock</samp></td><td>解析结果与内容摘要，跟着装配走</td></tr>
+<table align="center">
+<tr><td align="right"><samp>ip.yaml</samp></td>
+    <td><sub>身份 · 契约 · 旋钮 · 价目表 · 依赖；有 <samp>instances</samp> 即为装配</sub></td></tr>
+<tr><td align="right"><samp>regmap.yaml</samp></td>
+    <td><sub>寄存器与字段，属性名同 SystemRDL 2.0</sub></td></tr>
+<tr><td align="right"><samp>workspace.yaml</samp></td>
+    <td><sub>这次用到哪些包</sub></td></tr>
+<tr><td align="right"><samp>xirang.lock</samp></td>
+    <td><sub>解析结果与内容摘要，跟着装配走</sub></td></tr>
 </table>
 
 <details>
@@ -102,10 +104,9 @@ instances:
 deps: { hwcore: ^0.1, amba: ^0.1 }
 ```
 
-装配自己不写 RTL。字段细则见 [`spec/regmap.md`](https://github.com/Tape-Out/spec/blob/main/regmap.md)。
+<sub>装配自己不写 RTL。字段细则见 <a href="https://github.com/Tape-Out/spec/blob/main/regmap.md">spec/regmap.md</a>。</sub>
 
 </details>
-
 <hr>
 
 ### 导出目标

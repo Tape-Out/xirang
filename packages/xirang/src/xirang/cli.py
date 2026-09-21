@@ -15,7 +15,10 @@ from xirang_area.price import ASM_BAND, annotate, model_note, stale
 from xirang_area.recal import init as do_init
 from xirang_area.recal import recal as do_recal
 from xirang_back.ecc import synth
-from xirang_out.export import to_core, to_kconfig, to_tar
+import xirang_out.export  # noqa: F401  让所有导出目标完成注册
+from xirang_out.target import TARGETS, Ctx, check, listing, pick
+
+from xirang.new import cmd_new
 from xirang_out import kconf
 from xirang_out.doc import from_doc, to_doc
 from xirang_ws import find
@@ -242,43 +245,31 @@ def cmd_wrap(args) -> int:
 # ---------------------------------------------------------------- export
 
 def cmd_export(args) -> int:
-    res, pkgs = _resolve(args)
-    fmt = args.format or "resolved"
-
-    if fmt == "tar":
-        # tar 要有生成物才装得进去，所以先跑一遍不综合的 build
-        build = pathlib.Path(args.build or "build").resolve()
-        if not (build / GEN_HW).is_dir():
-            raise Bad(f"{build} 里没有生成物——先跑一次 xirang build --no-synth")
-        top_mod = "mk" + "".join(w.capitalize()
-                                 for w in res.top.replace("-", "_").split("_"))
-        out = pathlib.Path(args.out or f"{res.top}.tar.gz")
-        n = to_tar(res, pkgs, build, out, top_mod)
-        print(f"{out}  {n} 个源文件，解开后只要 bsc 就能重跑")
+    """导出：查表 -> 校验 needs -> 渲染 -> 写。加格式不必动这里。"""
+    if args.list:
+        print("导出目标：")
+        print(listing())
         return 0
 
-    if fmt == "core":
-        build = pathlib.Path(args.build or "build").resolve()
-        files = sorted(f.name for f in (build / "rtl").glob("*.v")) \
-            if (build / "rtl").is_dir() else []
-        # 空的 fileset 是一份没法用的 .core，而它长得像一份能用的。
-        # 「不许静默忽略」在这里就是：没有 Verilog 就说没有，
-        # 别照样吐一份出来让人以为能喂给 fusesoc。
-        if not files:
-            raise Bad(f"{build}/rtl 里没有 Verilog，导不出能用的 .core"
-                      f"——先跑一次不带 --no-synth 的 build")
-        txt = to_core(res, pkgs, files)
-    elif fmt == "kconfig":
-        txt = to_kconfig(res, pkgs)
-    else:
-        txt = yaml.safe_dump(to_doc(res), sort_keys=False, allow_unicode=True)
+    if not args.top:
+        raise Bad("XR-EXP-005 要导哪个包？给个名字，或者用 --list 看有哪些目标")
+    t = pick(args.format)
+    res, pkgs = _resolve(args)
+    ctx = Ctx(res=res, pkgs=pkgs,
+              build=pathlib.Path(args.build or "build").resolve(),
+              out=pathlib.Path(args.out) if args.out else None)
+    check(t, ctx)
 
-    if args.out:
-        pathlib.Path(args.out).write_text(txt, encoding="utf-8")
-        print(args.out)
+    data = t.render(ctx)
+    out = ctx.out or (pathlib.Path(f"{res.top}{t.ext}")
+                      if isinstance(data, bytes) else None)
+    if out is None:
+        sys.stdout.write(data)
     else:
-        sys.stdout.write(txt)
+        out.write_bytes(data if isinstance(data, bytes) else data.encode())
+        print(out)
     return 0
+
 
 
 # ---------------------------------------------------------------- build
@@ -552,13 +543,34 @@ def main(argv=None) -> int:
     wr = sub.add_parser("wrap", help="给叶子 IP 生成扁平端口顶层")
     common(wr); wr.add_argument("-o", "--out"); wr.set_defaults(fn=cmd_wrap)
 
+    n = sub.add_parser("new", help="从模板铺一个新仓")
+
+    n.add_argument("name", nargs="?", help="包名，省略则交互问")
+
+    n.add_argument("-t", "--template", help="模板，如 ip/regmap")
+
+    n.add_argument("--dir", help="铺到哪，默认当前目录下的同名目录")
+
+    n.add_argument("--list", action="store_true", help="只列模板")
+
+    n.add_argument("--vcs", default="git", choices=["git", "svn", "none"],
+
+                   help="初始化哪种版本库，默认 git")
+
+    n.set_defaults(fn=cmd_new)
+
+
     e = sub.add_parser("export", help="导出可再导入的完整配置")
-    common(e)
+    # --list 只是列表，不该逼人先给一个包名
+    e.add_argument("top", nargs="?")
+    e.add_argument("-s", "--set", action="append",
+                   help="覆盖旋钮，如 -s numPins=8")
     e.add_argument("-o", "--out")
     e.add_argument("-f", "--format",
-                   choices=["resolved", "core", "kconfig", "tar"],
+                   choices=sorted(TARGETS),
                    help="导出目标。别人的格式一律是导出目标，不在执行路径上")
     e.add_argument("--build", help="tar 与 core 要读的生成物目录")
+    e.add_argument("--list", action="store_true", help="只列导出目标")
     e.set_defaults(fn=cmd_export)
 
     ge = sub.add_parser("gen", help="只生成寄存器组与 C 头")

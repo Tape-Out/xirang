@@ -19,6 +19,9 @@ from collections.abc import Iterator
 from xirang_core.manifest import GEN_HW
 from xirang_core.model import Instance, Resolved
 
+from .doc import to_doc
+from .target import Ctx, target
+
 
 def _sym(*parts) -> str:
     return "_".join(p.upper().replace("-", "_") for p in parts if p)
@@ -194,3 +197,41 @@ def to_tar(res: Resolved, pkgs, build_dir: pathlib.Path, out: pathlib.Path,
         info.size = len(data)
         tf.addfile(info, io.BytesIO(data))
     return n
+
+
+# ---------------------------------------------------------------- 注册
+
+# 三个老导出器的形状各不相同，这里各套一层薄壳收进同一张表。
+# 加第四、第五种格式只往表里加一行，`cmd_export` 一个字不用动。
+
+@target(name="resolved", ext=".yaml", desc="解出来的配置：每个旋钮的最终值与来历")
+def _resolved(ctx: Ctx) -> str:
+    return yaml.safe_dump(to_doc(ctx.res), sort_keys=False, allow_unicode=True)
+
+
+@target(name="core", ext=".core", desc="FuseSoC CAPI2，上游 fusesoc 直接吃",
+        needs=("rtl",))
+def _core(ctx: Ctx) -> str:
+    files = sorted(f.name for f in (ctx.build / "rtl").glob("*.v"))
+    return to_core(ctx.res, ctx.pkgs, files)
+
+
+@target(name="kconfig", ext=".kconfig", desc="嵌套菜单，喂 menuconfig；有回程")
+def _kconfig(ctx: Ctx) -> str:
+    return to_kconfig(ctx.res, ctx.pkgs)
+
+
+@target(name="tar", ext=".tar.gz", desc="零工具依赖的源码包，解开只要 bsc",
+        needs=("build",))
+def _tar(ctx: Ctx) -> bytes:
+    import tempfile
+    top = "mk" + "".join(w.capitalize()
+                         for w in ctx.res.top.replace("-", "_").split("_"))
+    with tempfile.TemporaryDirectory() as d:
+        f = pathlib.Path(d) / "x.tar.gz"
+        to_tar(ctx.res, ctx.pkgs, ctx.build, f, top)
+        return f.read_bytes()
+
+
+from . import ipxact as _ipxact   # noqa: E402,F401  注册用
+from . import rdl as _rdl         # noqa: E402,F401

@@ -327,7 +327,13 @@ def stamp(pkg: Pkg, date: str | None = None) -> bool:
 
 
 def grid(spec: dict) -> list:
-    """一个参数去量哪几个值：量程两端与默认值。"""
+    """一个参数去量哪几个值：档位旋钮每一档都量，区间旋钮量两端与默认值。
+
+    档位旋钮漏了这一条的后果是只留下一个格点：曲线是平的，而「未计价」那道门禁
+    看的是价目表提没提这个旋钮，提了就放行——一个点的曲线恰好两头都糊弄过去。
+    """
+    if spec.get("values"):
+        return sorted(spec["values"])
     return sorted({v for v in (spec.get("default"), *(spec.get("range") or [])) if v is not None})
 
 
@@ -386,6 +392,9 @@ def plan(doc) -> dict:
     on = {f: True for f in feats}
     probes = []
     for q, s in params.items():
+        # 档位旋钮没有格点之间：每一种配置都落在格点上，中点不是合法取值
+        if s.get("values"):
+            continue
         g = grid(s)
         for a, b in zip(g, g[1:]):
             mid = (a + b) // 2

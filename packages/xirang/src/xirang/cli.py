@@ -475,6 +475,9 @@ def cmd_test(args) -> int:
         print(f"  {col}{r.mark}{OFF} {r.label:<{w}}  "
               f"{DIM if quiet else ''}{r.note}{OFF}")
     print()
+    for q in rep.notes:
+        print(f"  {DIM}· {q}{OFF}")
+    print()
     print(f"{rep.ran} 点实测，{rep.failed} 点不过")
     return rep.rc
 

@@ -62,6 +62,18 @@ def unmeasured(pkg: Pkg) -> list[str]:
     return out
 
 
+def noprice(pkg: Pkg) -> list[str]:
+    """压根没有价目表。
+
+    这不是缺陷，是一种状态：两块积木拼出来的 USB 转串口没有寄存器图、没有实测面积，
+    照样该在我们自己的工具里当一等公民。所以它默认只报不挡（`XR-AREA-006` 是 info），
+    要挡的人自己把级别调上去。
+    """
+    if pkg.is_library or pkg.is_assembly or (pkg.ip.get("area") or {}):
+        return []
+    return ["没有价目表——面积未知，不是面积为零"]
+
+
 def uncosted(pkg: Pkg) -> list[str]:
     """价目表压根没提到的旋钮：改它，预测纹丝不动。
 

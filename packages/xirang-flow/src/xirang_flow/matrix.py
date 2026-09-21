@@ -10,8 +10,9 @@ import shutil
 import subprocess
 import sys
 
-from xirang_area.check import flat_param, uncosted, unmeasured
+from xirang_area.check import flat_param, noprice, uncosted, unmeasured
 from xirang_back.sim import schedule, sim
+from xirang_core import diag
 from xirang_core.manifest import GEN_HW, GEN_SW, GEN_TEST, Bad, Pkg
 from xirang_core.matrix import points
 from xirang_core.resolve import resolve_pkg
@@ -22,6 +23,26 @@ from xirang_gen.wrap import neutral
 
 from .logs import first_err, tail
 from .report import Mark, Matrix, Row
+
+
+# 一个检查号配一个判据函数。加一道检查只加一行，不改结构
+CHECKS = (("XR-AREA-002", flat_param), ("XR-AREA-003", uncosted),
+          ("XR-AREA-006", noprice),
+          ("XR-AREA-005", unmeasured), ("XR-WIRE-001", dead_inputs),
+          ("XR-ADDR-001", no_overlap))
+
+
+def route(found, layers) -> tuple[list[str], list[str]]:
+    """把查出来的东西分成「挡路的」与「只报的」。只有 error 挡路。"""
+    stop: list[str] = []
+    note: list[str] = []
+    for code, msg in found:
+        lv, why = diag.resolve(code, layers)
+        if lv is diag.Level.noshow:
+            continue
+        line = f"{code} {msg}" + ("" if why == "默认" else f"（{lv.name}，来自{why}）")
+        (stop if diag.blocks(lv) else note).append(line)
+    return stop, note
 
 
 def tb_gens(pkg: Pkg) -> list[pathlib.Path]:
@@ -72,10 +93,11 @@ def run(pkg: Pkg, index: dict[str, Pkg], *, out: pathlib.Path,
     cap = pkg.name[:1].upper() + pkg.name[1:]
 
     rep = Matrix(name=pkg.name)
-    rep.problems = (flat_param(pkg) + uncosted(pkg) + unmeasured(pkg) + dead_inputs(pkg)
-                    + no_overlap(pkg))
+    found = [(c, m) for c, fn in CHECKS for m in fn(pkg)]
     if pkg.regmap:
-        rep.problems += unused_methods(pkg, out / GEN_HW / f"{cap}Regs.bsv")
+        found += [("XR-REG-001", m)
+                  for m in unused_methods(pkg, out / GEN_HW / f"{cap}Regs.bsv")]
+    rep.problems, rep.notes = route(found, [("包 ip.yaml", pkg.ip.get("diagnostics"))])
     if rep.problems:
         return rep
 

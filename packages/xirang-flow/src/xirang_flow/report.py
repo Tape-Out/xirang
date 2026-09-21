@@ -31,6 +31,8 @@ class Matrix:
     name: str
     rows: list[Row] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
+    # 报出来但不挡路的：严重级没到 error 的那些
+    notes: list[str] = field(default_factory=list)
     points: int = 0
 
     @property

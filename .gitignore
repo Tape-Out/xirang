@@ -1,6 +1,7 @@
 .*
 !.git*
 build/
+test/
 *.lock
 !xirang.lock
 *.bo

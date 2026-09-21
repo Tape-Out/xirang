@@ -44,6 +44,8 @@ $ ran export soc-mcu -f rdl        # 导成 SystemRDL
 <details>
 <summary><sub>配置来历与矩阵输出</sub></summary>
 
+<br />
+
 ```console
 $ ran config soc-mcu --why gpiob.numPins
 gpiob.numPins = 8
@@ -73,6 +75,8 @@ emac  矩阵 7 点
 
 <details>
 <summary><sub>清单样例</sub></summary>
+
+<br />
 
 ```yaml
 name: uart
@@ -120,6 +124,8 @@ deps: { hwcore: ^0.1, amba: ^0.1 }
 <details>
 <summary><sub>十道门禁</sub></summary>
 
+<br />
+
 | <sub>门禁</sub> | <sub>拦下什么</sub> |
 | :--: | :--: |
 | <sub>死输入</sub> | <sub>引脚驱进来的值，模块里一次也没读</sub> |
@@ -140,6 +146,8 @@ deps: { hwcore: ^0.1, amba: ^0.1 }
 
 <details>
 <summary><sub>八个包，与各自的改动来源</sub></summary>
+
+<br />
 
 | <sub>包</sub> | <sub>管什么</sub> | <sub>什么变了会逼它改</sub> |
 | :--: | :--: | :--: |

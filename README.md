@@ -1,22 +1,17 @@
+<table align="center" border="0"><tr>
+<td width="120" align="center"><img src="docs/logo.svg" width="96" alt=""></td>
+<td align="left">
+<h3>息壤</h3>
+<sub>XiRang · 硬件的包管理器与装配器</sub>
+</td>
+</tr></table>
+
 <div align="center">
 
-<br>
-
-<img src="docs/logo.svg" width="104" alt="">
-
-### 息壤
-
-<sub>XiRang · 硬件的包管理器与装配器</sub>
-
-<br>
-
-<a href="https://github.com/Tape-Out/xirang/actions/workflows/ci.yml"><img alt="ci" src="https://img.shields.io/github/actions/workflow/status/Tape-Out/xirang/ci.yml?branch=main&label=ci&style=flat-square&color=4C6A92"></a>
-<a href="pyproject.toml"><img alt="python" src="https://img.shields.io/badge/python%203.14+-4C6A92?style=flat-square"></a>
-<a href="https://github.com/Tape-Out/spec"><img alt="spec" src="https://img.shields.io/badge/spec%20v0.2.3-5E81AC?style=flat-square"></a>
-<a href="https://github.com/B-Lang-org/bsc"><img alt="bsv" src="https://img.shields.io/badge/BSV%20%C2%B7%20BH-6D8CB5?style=flat-square"></a>
-
-<a href="LICENSE-MIT"><img alt="MIT" src="https://img.shields.io/badge/MIT-8FC6D6?style=flat-square"></a>
-<a href="LICENSE-APACHE"><img alt="Apache-2.0" src="https://img.shields.io/badge/Apache--2.0-8FC6D6?style=flat-square"></a>
+<a href="pyproject.toml"><img alt="python" src="https://img.shields.io/badge/python%203.14+-2E3440?style=flat-square"></a>
+<a href="https://github.com/Tape-Out/spec"><img alt="spec" src="https://img.shields.io/badge/spec%20v0.2.3-4C6A92?style=flat-square"></a>
+<a href="LICENSE-MIT"><img alt="MIT" src="https://img.shields.io/badge/MIT-5E81AC?style=flat-square"></a>
+<a href="LICENSE-APACHE"><img alt="Apache-2.0" src="https://img.shields.io/badge/Apache--2.0-6D8CB5?style=flat-square"></a>
 <a href="LICENSE-MULAN"><img alt="MulanPSL-2.0" src="https://img.shields.io/badge/MulanPSL--2.0-8FC6D6?style=flat-square"></a>
 
 <br>

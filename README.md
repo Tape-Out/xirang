@@ -1,10 +1,6 @@
 <div align="center">
 
-<br>
-
-<img src="docs/banner.svg" width="430" alt="息壤 XiRang">
-
-<br><br>
+<img src="docs/banner.svg" width="374" alt="息壤 XiRang">
 
 <a href="pyproject.toml"><img alt="python" src="https://img.shields.io/badge/python%203.14+-2E3440?style=flat-square"></a>
 <a href="https://github.com/Tape-Out/spec"><img alt="spec" src="https://img.shields.io/badge/spec%20v0.2.3-4C6A92?style=flat-square"></a>
@@ -12,11 +8,7 @@
 <a href="LICENSE-APACHE"><img alt="Apache-2.0" src="https://img.shields.io/badge/Apache--2.0-6D8CB5?style=flat-square"></a>
 <a href="LICENSE-MULAN"><img alt="MulanPSL-2.0" src="https://img.shields.io/badge/MulanPSL--2.0-8FC6D6?style=flat-square"></a>
 
-<br>
-
-<sub>一个数据模型，一条执行路径</sub>
-
-<br>
+<sub>选件 · 接线 · 成片</sub>
 
 </div>
 

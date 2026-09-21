@@ -1,0 +1,69 @@
+name: release
+
+# 模板跟进只发生在这一步。平时开发不动子模块指针——指针进仓才谈得上可复现；
+# 只在发版时 --remote，才谈得上「下一版自动带上最新模板」。两者缺一不可。
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 版本号，如 0.2.0
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - name: 模板跟到 xrskel 的最新
+        id: skel
+        run: |
+          before=$(git rev-parse HEAD:packages/xirang/src/xirang/skel)
+          git submodule update --remote packages/xirang/src/xirang/skel
+          after=$(git -C packages/xirang/src/xirang/skel rev-parse HEAD)
+          echo "before=$before" >> "$GITHUB_OUTPUT"
+          echo "after=$after"   >> "$GITHUB_OUTPUT"
+          if [ "$before" != "$after" ]; then
+            echo "moved=yes" >> "$GITHUB_OUTPUT"
+            echo "模板指针 $before -> $after"
+          else
+            echo "moved=no" >> "$GITHUB_OUTPUT"
+            echo "模板没动"
+          fi
+
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --all-packages
+
+      # 必绿再发。指针动了却没跑测试，等于把没验过的模板发出去。
+      - run: uv run pytest -q
+      - run: uv run ruff check .
+
+      - name: 建 wheel
+        run: uv build --package xirang
+
+      - name: wheel 里真的有模板吗
+        run: |
+          whl=$(ls dist/xirang-*.whl | head -1)
+          n=$(python3 -m zipfile -l "$whl" | grep -c "xirang/skel/templates/" || true)
+          echo "$whl 里有 $n 个模板文件"
+          # package-data 配错时 wheel 会静默地少掉这些文件，装上之后 ran new
+          # 才报 XR-NEW-001。那太晚了，在这里就拦住。
+          [ "$n" -ge 10 ] || { echo "::error::wheel 里没有模板，package-data 配错了"; exit 1; }
+
+      - name: 记下指针并打标签
+        run: |
+          git config user.name  "xirang-bot"
+          git config user.email "xirang-bot@users.noreply.github.com"
+          if [ "${{ steps.skel.outputs.moved }}" = "yes" ]; then
+            git add packages/xirang/src/xirang/skel
+            git commit -m "chore(skel): follow xrskel main for the release."
+            git push
+          fi
+          git tag -a "v${{ inputs.version }}" -m "xirang v${{ inputs.version }}"
+          git push origin "v${{ inputs.version }}"

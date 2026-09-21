@@ -21,6 +21,7 @@ from xirang_out.target import TARGETS, Ctx, check, listing, pick
 
 from xirang.new import cmd_new
 from xirang_out import kconf
+from xirang_out import view
 from xirang_out.doc import from_doc, to_doc
 from xirang_ws import find
 from xirang_ws import manifest as wsman
@@ -185,6 +186,13 @@ def cmd_lint(args) -> int:
 
 
 # ---------------------------------------------------------------- tree
+
+def cmd_inspect(args) -> int:
+    """把一颗解出来的芯片打印出来。打印的是解出来的那份，不是清单。"""
+    res, pkgs = _resolve(args)
+    print(view.VIEWS[args.format](res, pkgs))
+    return 0
+
 
 def cmd_tree(args) -> int:
     res, _ = _resolve(args)
@@ -563,6 +571,11 @@ def main(argv=None) -> int:
     c = sub.add_parser("config", help="computed 面板")
     common(c); c.add_argument("--why", help="一条旋钮或一道检查的来历，如 gpio0.numPins、XR-AREA-003")
     c.set_defaults(fn=cmd_config)
+
+    ins = sub.add_parser("inspect", help="打印实例、旋钮、端点、地址与面积")
+    common(ins)
+    ins.add_argument("-f", "--format", choices=list(view.VIEWS), default="text")
+    ins.set_defaults(fn=cmd_inspect)
 
     t = sub.add_parser("tree", help="装配层次")
     common(t); t.set_defaults(fn=cmd_tree)

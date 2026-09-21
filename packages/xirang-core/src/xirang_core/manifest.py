@@ -3,6 +3,8 @@ import pathlib
 
 import yaml
 
+from xirang_core import diag
+
 
 class Bad(Exception):
     pass
@@ -80,7 +82,8 @@ PLATS = {"linux", "macos", "windows"}
 TOP_KEYS = {*DIR_KEYS,
             "name", "version", "spec", "kind", "lang", "identity", "contract",
             "params", "features", "constraints", "area", "emit", "deps",
-            "bus", "instances", "connect", "pipe", "test", "__path__"}
+            "bus", "instances", "connect", "pipe", "test", "diagnostics",
+            "__path__"}
 
 
 def slow_ctrl(emit: dict, vals) -> bool:
@@ -265,6 +268,14 @@ class Pkg:
 
         # 黑盒声明没人主动去读就等于没写，所以在这里查
         self.foreign_emit()
+
+        # 检查号与级别写错了要当场报：写错一个号，那道门禁的覆盖就静默失效
+        for code, lv in (ip.get("diagnostics") or {}).items():
+            if code not in diag.CHECKS:
+                raise Bad(f"{self.path}: diagnostics 里不认识的检查号 {code}")
+            if diag.level_of(lv) is None:
+                raise Bad(f"{self.path}: {code} 的级别 {lv} 不认识，"
+                          f"只有 {list(diag.Level.__members__)}")
 
         # regmap 里出现的门控旋钮必须在 ip.yaml 声明过。档位旋钮写成
         # {名字: [档...]}，而定宽的档位写在 params，所以两边都认

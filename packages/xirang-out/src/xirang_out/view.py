@@ -124,3 +124,31 @@ def as_mermaid(res: Resolved, pkgs: dict[str, Pkg]) -> str:
 
 
 VIEWS = {"text": summary, "json": as_json, "mermaid": as_mermaid}
+
+KINDS = {"装配": "asm", "库": "lib", "IP": "ip"}
+
+
+def catalog(idx: dict[str, Pkg], kind: str | None = None) -> list[tuple[str, ...]]:
+    """搜索路径上有哪些包，一行一个。先看得见，才谈得上用。"""
+    rows = []
+    for name, pk in sorted(idx.items()):
+        k = "装配" if pk.is_assembly else ("库" if pk.is_library else "IP")
+        if kind and KINDS[k] != kind:
+            continue
+        ident = pk.ip.get("identity") or {}
+        ctrl = (pk.ip.get("contract") or {}).get("ctrl") or {}
+        sig = (f"{ctrl['aw']}/{ctrl['dw']}"
+               if ctrl.get("shape") and ctrl["shape"] != "none" else "—")
+        rows.append((name, str(pk.ip.get("version", "—")), k,
+                     str(ident.get("maturity", "—")), str(len(pk.knobs())), sig))
+    return rows
+
+
+def table(head: tuple[str, ...], rows: list[tuple[str, ...]]) -> str:
+    """等宽表格：中文按两格算，列才对得齐。"""
+    if not rows:
+        return ""
+    w = [max([_w(r[i]) for r in rows] + [_w(head[i])]) for i in range(len(head))]
+    L = ["  ".join(_pad(h, x) for h, x in zip(head, w))]
+    L += ["  ".join(_pad(c, x) for c, x in zip(r, w)) for r in rows]
+    return "\n".join(L)

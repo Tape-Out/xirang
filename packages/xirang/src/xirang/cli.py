@@ -187,6 +187,19 @@ def cmd_lint(args) -> int:
 
 # ---------------------------------------------------------------- tree
 
+def cmd_list(args) -> int:
+    """搜索路径上有哪些包。像 pip list 那样先看见，才谈得上用。"""
+    _, ws, idx = find.open_(args.path)
+    rows = view.catalog(idx, args.kind)
+    if not rows:
+        print("没有包")
+        return 0
+    print(view.table(("名字", "版本", "类别", "成熟度", "旋钮", "契约"), rows))
+    print()
+    print(f"{len(rows)} 个包" + (f"，工作区 {ws.path.name}" if ws else "，没有工作区清单"))
+    return 0
+
+
 def cmd_inspect(args) -> int:
     """把一颗解出来的芯片打印出来。打印的是解出来的那份，不是清单。"""
     res, pkgs = _resolve(args)
@@ -571,6 +584,10 @@ def main(argv=None) -> int:
     c = sub.add_parser("config", help="computed 面板")
     common(c); c.add_argument("--why", help="一条旋钮或一道检查的来历，如 gpio0.numPins、XR-AREA-003")
     c.set_defaults(fn=cmd_config)
+
+    ls = sub.add_parser("list", help="搜索路径上有哪些包")
+    ls.add_argument("-k", "--kind", choices=["ip", "lib", "asm"])
+    ls.set_defaults(fn=cmd_list)
 
     ins = sub.add_parser("inspect", help="打印实例、旋钮、端点、地址与面积")
     common(ins)

@@ -67,6 +67,28 @@ def main() -> int:
     if len(d["instances"]) != 2 or d["instances"][1]["knobs"]["csWidth"] != 1:
         bad.append(f"json 视图与文本视图读的不是同一份：{d['instances'][1]['knobs']}")
 
+    idx = {
+        "uart": SimpleNamespace(is_assembly=False, is_library=False, knobs=lambda: {"a": 1},
+                                ip={"version": "0.1.0", "identity": {"maturity": "simulated"},
+                                    "contract": {"ctrl": {"shape": "flat", "aw": 8, "dw": 32}}}),
+        "hwcore": SimpleNamespace(is_assembly=False, is_library=True, knobs=lambda: {},
+                                  ip={"version": "0.1.0"}),
+        "soc": SimpleNamespace(is_assembly=True, is_library=False, knobs=lambda: {},
+                               ip={"version": "0.2.0"}),
+    }
+    cat = view.catalog(idx)
+    if [r[0] for r in cat] != ["hwcore", "soc", "uart"]:
+        bad.append(f"目录没按名字排：{[r[0] for r in cat]}")
+    if [r[2] for r in cat] != ["库", "装配", "IP"]:
+        bad.append(f"类别认错了：{[r[2] for r in cat]}")
+    if [r[0] for r in view.catalog(idx, "lib")] != ["hwcore"]:
+        bad.append("按类别筛没生效")
+    if dict(zip(("名", "版", "类", "熟", "钮", "约"), cat[2]))["约"] != "8/32":
+        bad.append(f"契约签名没印出来：{cat[2]}")
+    tb = view.table(("名字", "版本", "类别", "成熟度", "旋钮", "契约"), cat)
+    if len({view._w(ln) for ln in tb.splitlines()}) != 1:
+        bad.append("目录表每行不等宽")
+
     m = view.as_mermaid(RES, PKGS)
     if m.count('["') < 3 or "graph LR" not in m:
         bad.append("mermaid 视图不成图")
@@ -74,7 +96,7 @@ def main() -> int:
     for line in bad:
         print(f"✘ {line}")
     if not bad:
-        print("✔ 三种视图同源；字面量、端点形态、地址、未接端点数、列宽都对")
+        print("✔ 三种视图同源；字面量、端点形态、地址、未接端点数、列宽、包目录都对")
     return 1 if bad else 0
 
 

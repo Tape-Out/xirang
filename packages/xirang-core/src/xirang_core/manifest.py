@@ -229,18 +229,23 @@ class Pkg:
             t = f.get("type", "bool")
             if t not in ("bool", "choice"):
                 raise Bad(f"{self.path}: feature {fn} 的 type={t} 不支持")
-            if t == "choice":
-                if not f.get("values"):
-                    raise Bad(f"{self.path}: choice {fn} 没有 values")
-                if f.get("default") not in f["values"]:
-                    raise Bad(f"{self.path}: choice {fn} 的默认值不在 values 里")
             for dep in f.get("depends", []) or []:
                 if dep not in feats:
                     raise Bad(f"{self.path}: {fn} 依赖了不存在的 {dep}")
         for pn, p in params.items():
+            if p.get("type", "int") not in ("int", "choice"):
+                raise Bad(f"{self.path}: param {pn} 的 type={p['type']} 不支持")
             r = p.get("range")
             if r and not (r[0] <= p.get("default", r[0]) <= r[1]):
                 raise Bad(f"{self.path}: param {pn} 的默认值超出 range")
+        # 档位旋钮两处都能写：定宽的写 params（变成数值类型参数），开关的写 features
+        for kn, k in {**feats, **params}.items():
+            if k.get("type") != "choice":
+                continue
+            if not k.get("values"):
+                raise Bad(f"{self.path}: choice {kn} 没有 values")
+            if k.get("default") not in k["values"]:
+                raise Bad(f"{self.path}: choice {kn} 的默认值不在 values 里")
         # area 的键也进白名单。顶层键早就查了（D121），里面这一层一直没查——
         # 而写错一个键的后果跟写错 area 一样：整条价目静默失效。
         a = ip.get("area") or {}

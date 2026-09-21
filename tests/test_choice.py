@@ -21,8 +21,10 @@ QUAD = {"name": "fmt", "offset": 0, "feature": "quad",
 GATE = "(cfg.lines == 2 || cfg.lines == 4 || cfg.lines == 8)"
 
 
-def gen(*regs) -> str:
+def gen(*regs, params=None) -> str:
     spec = {"ip": "t", "contract": {"aw": 8, "dw": 32}, "regs": list(regs)}
+    if params:
+        spec["params"] = params
     return bsv(SimpleNamespace(regmap=spec, name="t"))
 
 
@@ -47,6 +49,13 @@ def main() -> int:
     txt = gen(QUAD)
     if "Bool quad;" not in txt or "cfg.quad" not in txt:
         bad.append("布尔特性被连累了")
+
+    # 定宽的档位旋钮写在 params：它是数值类型参数，取值要 valueOf，且不该再进 Cfg
+    txt = gen(LINES, params=["lines"])
+    if "valueOf(lines) == 4" not in txt:
+        bad.append("param 档位没发成 valueOf")
+    if "RegsCfg" in txt:
+        bad.append("param 被重复塞进了 Cfg")
 
     # 反例：档位表写漏 8
     mut = {**LINES, "feature": {"lines": [2, 4]}}

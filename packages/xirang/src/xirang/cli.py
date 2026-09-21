@@ -194,7 +194,7 @@ def cmd_list(args) -> int:
     if not rows:
         print("没有包")
         return 0
-    print(view.table(("名字", "版本", "类别", "成熟度", "旋钮", "契约"), rows))
+    print(view.table(("名字", "版本", "类别", "成熟度", "旋钮", "契约", "目标"), rows))
     print()
     print(f"{len(rows)} 个包" + (f"，工作区 {ws.path.name}" if ws else "，没有工作区清单"))
     return 0

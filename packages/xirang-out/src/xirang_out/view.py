@@ -91,7 +91,11 @@ def summary(res: Resolved, pkgs: dict[str, Pkg]) -> str:
 
 
 def as_json(res: Resolved, pkgs: dict[str, Pkg]) -> str:
-    doc = {"top": res.top, "bus": res.bus, "area_um2": res.area_um2, "instances": []}
+    top = pkgs.get(res.top)
+    doc = {"top": res.top, "bus": res.bus, "area_um2": res.area_um2,
+           # 构建目标在这里出，CI 就不必再 grep ip.yaml 猜
+           "targets": top.targets() if top else {},
+           "instances": []}
     for _, inst in res.walk():
         pkg = pkgs.get(inst.of)
         doc["instances"].append({
@@ -139,8 +143,10 @@ def catalog(idx: dict[str, Pkg], kind: str | None = None) -> list[tuple[str, ...
         ctrl = (pk.ip.get("contract") or {}).get("ctrl") or {}
         sig = (f"{ctrl['aw']}/{ctrl['dw']}"
                if ctrl.get("shape") and ctrl["shape"] != "none" else "—")
+        drv = "+".join(sorted({(v or {}).get("driver", "?")
+                               for v in pk.targets().values()}))
         rows.append((name, str(pk.ip.get("version", "—")), k,
-                     str(ident.get("maturity", "—")), str(len(pk.knobs())), sig))
+                     str(ident.get("maturity", "—")), str(len(pk.knobs())), sig, drv))
     return rows
 
 

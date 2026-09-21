@@ -67,14 +67,19 @@ def main() -> int:
     if len(d["instances"]) != 2 or d["instances"][1]["knobs"]["csWidth"] != 1:
         bad.append(f"json 视图与文本视图读的不是同一份：{d['instances'][1]['knobs']}")
 
+    def fake(asm, lib, knobs, ip, targets):
+        return SimpleNamespace(is_assembly=asm, is_library=lib, knobs=lambda: knobs,
+                               ip=ip, targets=lambda: targets)
+
     idx = {
-        "uart": SimpleNamespace(is_assembly=False, is_library=False, knobs=lambda: {"a": 1},
-                                ip={"version": "0.1.0", "identity": {"maturity": "simulated"},
-                                    "contract": {"ctrl": {"shape": "flat", "aw": 8, "dw": 32}}}),
-        "hwcore": SimpleNamespace(is_assembly=False, is_library=True, knobs=lambda: {},
-                                  ip={"version": "0.1.0"}),
-        "soc": SimpleNamespace(is_assembly=True, is_library=False, knobs=lambda: {},
-                               ip={"version": "0.2.0"}),
+        "uart": fake(False, False, {"a": 1},
+                     {"version": "0.1.0", "identity": {"maturity": "simulated"},
+                      "contract": {"ctrl": {"shape": "flat", "aw": 8, "dw": 32}}},
+                     {"regs": {"driver": "regs"}, "flat": {"driver": "flat"}}),
+        "hwcore": fake(False, True, {}, {"version": "0.1.0"},
+                       {"library": {"driver": "library"}}),
+        "soc": fake(True, False, {}, {"version": "0.2.0"},
+                    {"assembly": {"driver": "assembly"}}),
     }
     cat = view.catalog(idx)
     if [r[0] for r in cat] != ["hwcore", "soc", "uart"]:
@@ -83,9 +88,13 @@ def main() -> int:
         bad.append(f"类别认错了：{[r[2] for r in cat]}")
     if [r[0] for r in view.catalog(idx, "lib")] != ["hwcore"]:
         bad.append("按类别筛没生效")
-    if dict(zip(("名", "版", "类", "熟", "钮", "约"), cat[2]))["约"] != "8/32":
+    head = ("名字", "版本", "类别", "成熟度", "旋钮", "契约", "目标")
+    row = dict(zip(head, cat[2]))
+    if row["契约"] != "8/32":
         bad.append(f"契约签名没印出来：{cat[2]}")
-    tb = view.table(("名字", "版本", "类别", "成熟度", "旋钮", "契约"), cat)
+    if row["目标"] != "flat+regs":
+        bad.append(f"一个包的几个目标没都印出来：{row['目标']}")
+    tb = view.table(head, cat)
     if len({view._w(ln) for ln in tb.splitlines()}) != 1:
         bad.append("目录表每行不等宽")
 

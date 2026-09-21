@@ -67,6 +67,9 @@ GEN_HW = "hwsrc"
 GEN_SW = "sw"
 GEN_TEST = "htest"
 
+# 构建目标认哪几种驱动。名字说的是「怎么构建」，不是「构建出什么」。
+DRIVERS = {"regs", "flat", "bsv", "assembly", "library", "foreign", "none"}
+
 # 黑盒声明认的键。黑盒不解析源码，这份声明就是它的全部形状。
 FOREIGN_KEYS = {"kind", "lang", "top", "rtl", "sim", "params",
                 "clock", "reset", "ports", "limits"}
@@ -83,7 +86,7 @@ TOP_KEYS = {*DIR_KEYS,
             "name", "version", "spec", "kind", "lang", "identity", "contract",
             "params", "features", "constraints", "area", "emit", "deps",
             "bus", "instances", "connect", "pipe", "test", "diagnostics",
-            "__path__"}
+            "targets", "__path__"}
 
 
 def slow_ctrl(emit: dict, vals) -> bool:
@@ -266,8 +269,9 @@ class Pkg:
             if pn not in params:
                 raise Bad(f"{self.path}: area.params 提到清单里没有的旋钮 {pn}")
 
-        # 黑盒声明没人主动去读就等于没写，所以在这里查
+        # 黑盒声明与构建目标没人主动去读就等于没写，所以在这里查
         self.foreign_emit()
+        self._check_targets()
 
         # 检查号与级别写错了要当场报：写错一个号，那道门禁的覆盖就静默失效
         for code, lv in (ip.get("diagnostics") or {}).items():
@@ -292,6 +296,71 @@ class Pkg:
             for k in ("aw", "dw"):
                 if k in c and k in ic and c[k] != ic[k]:
                     raise Bad(f"regmap 与 ip.yaml 的 contract.{k} 不一致：{c[k]} vs {ic[k]}")
+
+    def targets(self) -> dict[str, dict]:
+        """怎么构建这个包。清单没写就按今天的规则推断。
+
+        推断这件事本身没问题，**把推断藏在 CI 的 grep 里才有问题**：`rvdbg` 那种
+        没有控制口的调试模块落进「regs」那一档，跑的是它根本没有的寄存器一致性测试。
+        写出来之后，工具能答、CI 不必猜，而且写错了当场就报。
+        """
+        want = self.ip.get("targets")
+        if want:
+            return {k: dict(v or {}) for k, v in want.items()}
+        return self._guess()
+
+    def _guess(self) -> dict[str, dict]:
+        """一个包可以有好几个目标：`uart` 既出寄存器组，也出扁平端口顶层。"""
+        if self.is_library:
+            return {"library": {"driver": "library"}}
+        if self.is_assembly:
+            return {"assembly": {"driver": "assembly"}}
+        kinds = {e.get("kind") for e in self.ip.get("emit", []) or []}
+        out: dict[str, dict] = {}
+        if self.regmap:
+            out["regs"] = {"driver": "regs"}
+        if "verilog-flat" in kinds:
+            out["flat"] = {"driver": "flat"}
+        if "foreign" in kinds:
+            out["foreign"] = {"driver": "foreign"}
+        # 只出 BSV、既没有寄存器图也不扁平化的那一类：rvdbg 就是
+        if not out and "bsv" in kinds:
+            out["bsv"] = {"driver": "bsv"}
+        return out or {"none": {"driver": "none"}}
+
+    def _check_targets(self):
+        want = self.ip.get("targets")
+        if not want:
+            return
+        if not isinstance(want, dict) or not want:
+            raise Bad(f"{self.path}: targets 是「名字 -> {{driver: …}}」的表")
+        for name, t in want.items():
+            t = t or {}
+            unknown = set(t) - {"driver"}
+            if unknown:
+                raise Bad(f"{self.path}: 目标 {name} 有不认识的键 {sorted(unknown)}")
+            d = t.get("driver")
+            if d not in DRIVERS:
+                raise Bad(f"{self.path}: 目标 {name} 的 driver={d} 不认识，"
+                          f"只有 {sorted(DRIVERS)}")
+            # 声明要对得上树上真有的东西，否则这句声明比猜还糟
+            if d == "assembly" and not self.is_assembly:
+                raise Bad(f"{self.path}: 目标 {name} 说自己是 assembly，但没有 instances")
+            if d == "library" and not self.is_library:
+                raise Bad(f"{self.path}: 目标 {name} 说自己是 library，但 kind 不是 library")
+            if d == "regs" and not self.regmap:
+                raise Bad(f"{self.path}: 目标 {name} 说自己是 regs，但没有 regmap.yaml")
+            if d == "bsv" and not any(e.get("kind") == "bsv"
+                                      for e in self.ip.get("emit", []) or []):
+                raise Bad(f"{self.path}: 目标 {name} 说自己是 bsv，但 emit 里没有 bsv 段")
+            if d == "flat" and not any(e.get("kind") == "verilog-flat"
+                                       for e in self.ip.get("emit", []) or []):
+                raise Bad(f"{self.path}: 目标 {name} 说自己是 flat，"
+                          f"但 emit 里没有 verilog-flat 段")
+            if d == "foreign" and not any(e.get("kind") == "foreign"
+                                          for e in self.ip.get("emit", []) or []):
+                raise Bad(f"{self.path}: 目标 {name} 说自己是 foreign，"
+                          f"但 emit 里没有 foreign 段")
 
     def foreign_emit(self) -> dict | None:
         """`kind: foreign` 的 emit 段。我们自己写的包没有这一段，返回 None。

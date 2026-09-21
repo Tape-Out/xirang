@@ -1,0 +1,108 @@
+=== Generated schedule for mkSpiBareLines4_8_1_4 ===
+
+Method schedule
+---------------
+Method: regs_access
+Ready signal: True
+Sequenced after: pins_cs_n, pins_io_oe
+Sequenced after (restricted): pins_sck, pins_io_o, pins_io_i, irq
+Conflicts: regs_access
+ 
+Method: pins_sck
+Ready signal: True
+Conflict-free: pins_sck, pins_cs_n, pins_io_o, pins_io_oe, pins_io_i, irq
+Sequenced before (restricted): regs_access
+ 
+Method: pins_cs_n
+Ready signal: True
+Conflict-free: pins_sck, pins_cs_n, pins_io_o, pins_io_oe, pins_io_i, irq
+Sequenced before: regs_access
+ 
+Method: pins_io_o
+Ready signal: True
+Conflict-free: pins_sck, pins_cs_n, pins_io_o, pins_io_oe, pins_io_i, irq
+Sequenced before (restricted): regs_access
+ 
+Method: pins_io_oe
+Ready signal: True
+Conflict-free: pins_sck, pins_cs_n, pins_io_o, pins_io_oe, pins_io_i, irq
+Sequenced before: regs_access
+ 
+Method: pins_io_i
+Ready signal: True
+Conflict-free: pins_sck, pins_cs_n, pins_io_o, pins_io_oe, irq
+Sequenced before (restricted): regs_access
+Conflicts: pins_io_i
+ 
+Method: irq
+Ready signal: True
+Conflict-free: pins_sck, pins_cs_n, pins_io_o, pins_io_oe, pins_io_i, irq
+Sequenced before (restricted): regs_access
+ 
+Rule schedule
+-------------
+Rule: m_mark
+Predicate: True
+Blocking rules: (none)
+ 
+Rule: m_push
+Predicate: m_txPend && m_txq.i_notFull
+Blocking rules: (none)
+ 
+Rule: m_csTrack
+Predicate: True
+Blocking rules: (none)
+ 
+Rule: m_idle
+Predicate: m_st.read == 3'd0
+Blocking rules: (none)
+ 
+Rule: m_load
+Predicate: m_txq.i_notEmpty && (m_st.read == 3'd2)
+Blocking rules: (none)
+ 
+Rule: m_tick
+Predicate: ((m_st.read == 3'd1) || (m_st.read == 3'd4) ||
+	    (m_st.read == 3'd5) ||
+	    (m_st.read == 3'd6)) &&
+	   (! (m_dly == 8'd0))
+Blocking rules: (none)
+ 
+Rule: m_waited
+Predicate: ((m_st.read == 3'd1) || (m_st.read == 3'd4) ||
+	    (m_st.read == 3'd5) ||
+	    (m_st.read == 3'd6)) &&
+	   (m_dly == 8'd0)
+Blocking rules: (none)
+ 
+Rule: m_step
+Predicate: m_st.read == 3'd3
+Blocking rules: (none)
+ 
+Rule: m_status
+Predicate: True
+Blocking rules: (none)
+ 
+Rule: m_pop
+Predicate: m_r_rxdata_data_acc.whas && m_rxq.i_notEmpty
+Blocking rules: (none)
+ 
+Logical execution order: pins_sck,
+			 pins_cs_n,
+			 pins_io_o,
+			 pins_io_oe,
+			 pins_io_i,
+			 irq,
+			 m_csTrack,
+			 m_idle,
+			 m_tick,
+			 m_waited,
+			 m_status,
+			 m_push,
+			 m_load,
+			 m_step,
+			 regs_access,
+			 m_mark,
+			 m_pop
+
+=====================================================

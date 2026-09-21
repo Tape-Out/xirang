@@ -65,6 +65,12 @@ GEN_HW = "hwsrc"
 GEN_SW = "sw"
 GEN_TEST = "htest"
 
+# 黑盒声明认的键。黑盒不解析源码，这份声明就是它的全部形状。
+FOREIGN_KEYS = {"kind", "lang", "top", "rtl", "sim", "params",
+                "clock", "reset", "ports", "limits"}
+PORT_KEYS = {"endpoint", "kind", "role", "profile", "prefix", "type", "map"}
+EP_KINDS = {"transaction", "stream", "event", "physical"}
+
 # `when` 认的平台名。不认识的值要报错：写 `when: win` 而被默默忽略，
 # 比写错键更难查——那一条会在所有平台上都生效。
 PLATS = {"linux", "macos", "windows"}
@@ -257,17 +263,79 @@ class Pkg:
             if pn not in params:
                 raise Bad(f"{self.path}: area.params 提到清单里没有的旋钮 {pn}")
 
-        # regmap 里出现的 feature 必须在 ip.yaml 声明过
+        # 黑盒声明没人主动去读就等于没写，所以在这里查
+        self.foreign_emit()
+
+        # regmap 里出现的门控旋钮必须在 ip.yaml 声明过。档位旋钮写成
+        # {名字: [档...]}，而定宽的档位写在 params，所以两边都认
         if self.regmap:
+            known = {**feats, **params}
             for reg in self.regmap.get("regs", []) or []:
                 fn = reg.get("feature")
-                if fn and fn not in feats:
-                    raise Bad(f"regmap 的 {reg['name']} 挂了未声明的 feature {fn}")
+                if isinstance(fn, dict):
+                    fn = next(iter(fn), None)
+                if fn and fn not in known:
+                    raise Bad(f"regmap 的 {reg['name']} 挂了未声明的旋钮 {fn}")
             c = self.regmap.get("contract", {})
             ic = (ip.get("contract") or {}).get("ctrl", {})
             for k in ("aw", "dw"):
                 if k in c and k in ic and c[k] != ic[k]:
                     raise Bad(f"regmap 与 ip.yaml 的 contract.{k} 不一致：{c[k]} vs {ic[k]}")
+
+    def foreign_emit(self) -> dict | None:
+        """`kind: foreign` 的 emit 段。我们自己写的包没有这一段，返回 None。
+
+        黑盒不解析源码，所以这份声明就是它的全部形状：对不上的地方只能在这里查出来。
+        """
+        for e in self.ip.get("emit", []) or []:
+            if e.get("kind") != "foreign":
+                continue
+            unknown = set(e) - FOREIGN_KEYS
+            if unknown:
+                raise Bad(f"{self.path}: emit 的 foreign 段有不认识的键 {sorted(unknown)}")
+            missing = [k for k in ("lang", "top", "rtl", "ports") if k not in e]
+            if missing:
+                raise Bad(f"{self.path}: emit 的 foreign 段缺 {missing}——"
+                          f"少一项就接不上：顶层名与文件给源码闭包，ports 给端口到端点的对应")
+            if e["lang"] not in LANGS:
+                raise Bad(f"{self.path}: foreign 的 lang={e['lang']} 不认识")
+            for k in ("rtl", "sim"):
+                fs = e.get(k)
+                if fs is None:
+                    continue
+                if not isinstance(fs, list) or not fs:
+                    raise Bad(f"{self.path}: foreign 的 {k} 是非空的文件列表")
+                for f in fs:
+                    if not (self.root / f).is_file():
+                        raise Bad(f"{self.path}: foreign 的 {k} 列了树上没有的 {f}")
+            knobs = self.knobs()
+            for pn, v in (e.get("params") or {}).items():
+                if isinstance(v, str) and v not in knobs:
+                    raise Bad(f"{self.path}: foreign 的参数 {pn} 投影到了不存在的旋钮 {v}")
+            for k in ("clock", "reset"):
+                c = e.get(k)
+                if c is not None and "port" not in c:
+                    raise Bad(f"{self.path}: foreign 的 {k} 要写 port")
+            r = e.get("reset") or {}
+            if r.get("active") not in (None, "high", "low"):
+                raise Bad(f"{self.path}: foreign 的 reset.active 只能是 high 或 low")
+            for pt in e["ports"]:
+                bad = set(pt) - PORT_KEYS
+                if bad:
+                    raise Bad(f"{self.path}: foreign 的 ports 有不认识的键 {sorted(bad)}")
+                if "endpoint" not in pt or "kind" not in pt:
+                    raise Bad(f"{self.path}: foreign 的 ports 每一项都要写 endpoint 与 kind")
+                if pt["kind"] not in EP_KINDS:
+                    raise Bad(f"{self.path}: foreign 的端点 {pt['endpoint']} "
+                              f"kind={pt['kind']} 不认识，只有 {sorted(EP_KINDS)}")
+                if pt["kind"] == "transaction" and not pt.get("profile"):
+                    raise Bad(f"{self.path}: 事务端点 {pt['endpoint']} 要写 profile——"
+                              f"外人不讲我们的契约，只讲 apb4 或 axi")
+                if not pt.get("prefix") and not pt.get("map"):
+                    raise Bad(f"{self.path}: 端点 {pt['endpoint']} 既没有 prefix 也没有 map，"
+                              f"对不到它的端口上")
+            return e
+        return None
 
     def bsv_emit(self) -> dict:
         """kind: bsv 的 emit 段。装配器要靠它知道 BSV 侧叫什么名字。"""

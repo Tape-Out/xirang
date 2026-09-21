@@ -36,11 +36,25 @@ def flat_emit(pkg: Pkg) -> dict | None:
 
 
 def sub_targs(sub: dict, vals, name: str) -> str:
-    """子接口的类型参数：写旋钮名就取求解后的值，写数字就照用。"""
+    """子接口的类型参数：写旋钮名就取求解后的值，写数字就照用。
+
+    还可以写 `{knob: 旋钮名, min: N}`：取旋钮值与 N 的大者。引脚组常有这种下限——
+    单线 SPI 的数据线只走一位，但 MOSI 与 MISO 是分开的两根，少一根就接不出去。
+    这是一条有界的规则，不是表达式语言：要再加一种也只是再加一个键。
+    """
     out = []
     for a in sub.get("targs", []) or []:
         if isinstance(a, int):
             out.append(str(a))
+        elif isinstance(a, dict):
+            unknown = set(a) - {"knob", "min"}
+            if unknown or "knob" not in a:
+                raise Bad(f"{name}: 子接口 {sub.get('name')} 的类型参数只认 "
+                          f"{{knob, min}}，看到 {sorted(a)}")
+            if a["knob"] not in vals:
+                raise Bad(f"{name}: 子接口 {sub.get('name')} 的类型参数 "
+                          f"{a['knob']} 不是这个包的旋钮")
+            out.append(str(max(int(vals[a["knob"]].value), int(a.get("min", 0)))))
         elif a in vals:
             out.append(str(vals[a].value))
         else:

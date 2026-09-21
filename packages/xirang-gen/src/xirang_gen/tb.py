@@ -49,8 +49,8 @@ def regs_tb(pkg: Pkg, vals, suffix: str = "") -> str:
         if a and isinstance(a.get("count"), str) and a["count"] in nums:
             a["count"] = nums[a["count"]]
     rs = _rows(spec, [], dw)
-    feats = {k: v.value for k, v in vals.items()
-             if pkg.knobs().get(k, {}).get("kind") == "feature"}
+    # 门控可以挂在 param 上（定宽的档位旋钮就是 param），所以整张旋钮表都要在
+    feats = {k: v.value for k, v in vals.items()}
 
     cases = []
     for reg in rs:
@@ -144,11 +144,12 @@ def regs_tb(pkg: Pkg, vals, suffix: str = "") -> str:
                     f"zeros: {dw}'h{want0:0{dw // 4}X} }};   // {name}")
 
     # Cfg 里只有寄存器图真的用到的特性——IP 的其它开关不在寄存器组的视野里
-    used = feat_refs(rs)
-    args = ", ".join(f"{k}: {_lit(vals[k].value)}" for k in used)
     # 类型参数按**寄存器图**声明的那几个来。IP 还有别的参数（cache 的行数与
     # 行宽只影响实现），寄存器接口里没有它们的位置，照 ip.yaml 填就多出几个。
     rmp = list((pkg.regmap or {}).get("params") or [])
+    # 门控旋钮里写在 params 的那些已经是类型参数了，不进 Cfg
+    used = [k for k in feat_refs(rs) if k not in rmp]
+    args = ", ".join(f"{k}: {_lit(vals[k].value)}" for k in used)
     nums = [str(vals[k].value) for k in rmp if k in vals]
     miss = [k for k in rmp if k not in vals]
     if miss:

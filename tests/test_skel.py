@@ -82,3 +82,23 @@ def test_every_template_renders_clean(tmp_path):
             except UnicodeDecodeError:
                 pass
         assert files, f"{t} 渲染出来是空的"
+
+
+def test_empty_clone_is_a_fine_target(tmp_path):
+    """刚克隆的空仓里只有 .git。它是最常见的起点，不该被当成非空拦下。"""
+    from xirang.new import plan_files, write
+    (tmp_path / ".git").mkdir()
+    files, dirs = plan_files("lib", "probe")
+    write(files, dirs, tmp_path)
+    assert (tmp_path / "ip.yaml").is_file()
+
+
+def test_non_empty_target_is_refused(tmp_path):
+    """反例：真有东西就必须拒，且一个文件都不写。"""
+    import pytest
+    from xirang.new import plan_files, write
+    (tmp_path / "keep.txt").write_text("x", encoding="utf-8")
+    files, dirs = plan_files("lib", "probe")
+    with pytest.raises(Exception):
+        write(files, dirs, tmp_path)
+    assert [p.name for p in tmp_path.iterdir()] == ["keep.txt"]

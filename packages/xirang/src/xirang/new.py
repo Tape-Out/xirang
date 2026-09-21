@@ -101,7 +101,8 @@ def plan_files(template: str, name: str) -> tuple[dict, set]:
 
 
 def write(files: dict, dirs: set, dest: pathlib.Path) -> None:
-    if dest.exists() and any(dest.iterdir()):
+    # 刚克隆的空仓里只有 .git，那正是最该能铺的起点，不算非空
+    if dest.exists() and any(p.name != ".git" for p in dest.iterdir()):
         raise Bad(f"XR-NEW-005 {dest} 已存在且非空，一个文件都没写。"
                   f"换个目录，或者清空它")
     for d in dirs:

@@ -60,12 +60,12 @@ emac  矩阵 7 点
 
 <div align="center">
 
-| 文件 | 内容 |
+| <small>文件</small> | <small>内容</small> |
 | :--: | :--: |
-| `ip.yaml` | 身份 · 契约 · 旋钮 · 价目表 · 依赖；有 `instances` 即为装配 |
-| `regmap.yaml` | 寄存器与字段，属性名同 SystemRDL 2.0 |
-| `workspace.yaml` | 这次用到哪些包 |
-| `xirang.lock` | 解析结果与内容摘要，跟着装配走 |
+| <small>`ip.yaml`</small> | <small>身份 · 契约 · 旋钮 · 价目表 · 依赖；有 `instances` 即为装配</small> |
+| <small>`regmap.yaml`</small> | <small>寄存器与字段，属性名同 SystemRDL 2.0</small> |
+| <small>`workspace.yaml`</small> | <small>这次用到哪些包</small> |
+| <small>`xirang.lock`</small> | <small>解析结果与内容摘要，跟着装配走</small> |
 
 </div>
 
@@ -107,14 +107,14 @@ deps: { hwcore: ^0.1, amba: ^0.1 }
 
 <div align="center">
 
-| 目标 | 是什么 |
+| <small>目标</small> | <small>是什么</small> |
 | :--: | :--: |
-| `rdl` | SystemRDL 2.0 |
-| `ipxact` | IP-XACT 1685 |
-| `core` | FuseSoC CAPI2 |
-| `kconfig` | menuconfig 菜单 |
-| `resolved` | 解出的配置与来历 |
-| `tar` | 自足源码包 |
+| <small>`rdl`</small> | <small>SystemRDL 2.0</small> |
+| <small>`ipxact`</small> | <small>IP-XACT 1685</small> |
+| <small>`core`</small> | <small>FuseSoC CAPI2</small> |
+| <small>`kconfig`</small> | <small>menuconfig 菜单</small> |
+| <small>`resolved`</small> | <small>解出的配置与来历</small> |
+| <small>`tar`</small> | <small>自足源码包</small> |
 
 </div>
 <hr>
@@ -128,18 +128,18 @@ deps: { hwcore: ^0.1, amba: ^0.1 }
 
 <div align="center">
 
-| 门禁 | 拦下什么 |
+| <small>门禁</small> | <small>拦下什么</small> |
 | :--: | :--: |
-| 死输入 | 引脚驱进来的值，模块里一次也没读 |
-| 未用方法 | 寄存器接口暴露的方法，实现里没有用到 |
-| 地址重叠 | 某个合法配置下，两个寄存器占同一个地址 |
-| 调度 | 装配生成 Verilog 时 `bsc` 报出的规则冲突 |
-| 价目表失效 | 价目表量的是另一份生成产物 |
-| 未计价 | 改这个旋钮，面积预测不动 |
-| 未实测 | 标了价，却没有一行实测打开过这个特性 |
-| 曲线平坦 | 参数改了，量出来的面积不变 |
-| 低估 | 预测面积低于实测 |
-| 工作区 | 清单、源码与锁不一致 |
+| <small>死输入</small> | <small>引脚驱进来的值，模块里一次也没读</small> |
+| <small>未用方法</small> | <small>寄存器接口暴露的方法，实现里没有用到</small> |
+| <small>地址重叠</small> | <small>某个合法配置下，两个寄存器占同一个地址</small> |
+| <small>调度</small> | <small>装配生成 Verilog 时 `bsc` 报出的规则冲突</small> |
+| <small>价目表失效</small> | <small>价目表量的是另一份生成产物</small> |
+| <small>未计价</small> | <small>改这个旋钮，面积预测不动</small> |
+| <small>未实测</small> | <small>标了价，却没有一行实测打开过这个特性</small> |
+| <small>曲线平坦</small> | <small>参数改了，量出来的面积不变</small> |
+| <small>低估</small> | <small>预测面积低于实测</small> |
+| <small>工作区</small> | <small>清单、源码与锁不一致</small> |
 
 </div>
 
@@ -155,16 +155,16 @@ deps: { hwcore: ^0.1, amba: ^0.1 }
 
 <div align="center">
 
-| 包 | 管什么 | 什么变了会逼它改 |
+| <small>包</small> | <small>管什么</small> | <small>什么变了会逼它改</small> |
 | :--: | :--: | :--: |
-| `xirang-core` | 清单 schema · 层叠与求解 · 依赖与锁 · 矩阵派生 | 规范涨版本 |
-| `xirang-gen` | 寄存器图 → BSV / C 头 / 测试台 · 装配 → 顶层 | 目标语言、契约形态 |
-| `xirang-area` | 价目表 · 面积预测 · 回填 | 面积模型 |
-| `xirang-back` | 驱动综合与仿真工具 | EDA 工具与版本 |
-| `xirang-out` | 六种导出目标与读回 | 别人的格式 |
-| `xirang-ws` | 工作区：成员与 `status` | 产品怎么组装 |
-| `xirang-flow` | 编排：叶子 · 装配 · 矩阵 | 质量策略 |
-| `xirang` | 命令行 | 用户界面 |
+| <small>`xirang-core`</small> | <small>清单 schema · 层叠与求解 · 依赖与锁 · 矩阵派生</small> | <small>规范涨版本</small> |
+| <small>`xirang-gen`</small> | <small>寄存器图 → BSV / C 头 / 测试台 · 装配 → 顶层</small> | <small>目标语言、契约形态</small> |
+| <small>`xirang-area`</small> | <small>价目表 · 面积预测 · 回填</small> | <small>面积模型</small> |
+| <small>`xirang-back`</small> | <small>驱动综合与仿真工具</small> | <small>EDA 工具与版本</small> |
+| <small>`xirang-out`</small> | <small>六种导出目标与读回</small> | <small>别人的格式</small> |
+| <small>`xirang-ws`</small> | <small>工作区：成员与 `status`</small> | <small>产品怎么组装</small> |
+| <small>`xirang-flow`</small> | <small>编排：叶子 · 装配 · 矩阵</small> | <small>质量策略</small> |
+| <small>`xirang`</small> | <small>命令行</small> | <small>用户界面</small> |
 
 </div>
 

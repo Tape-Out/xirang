@@ -1,0 +1,2 @@
+xirang-core
+ruamel.yaml>=0.18

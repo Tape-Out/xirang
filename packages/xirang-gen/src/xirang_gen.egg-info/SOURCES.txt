@@ -1,0 +1,12 @@
+pyproject.toml
+src/xirang_gen/__init__.py
+src/xirang_gen/assemble.py
+src/xirang_gen/check.py
+src/xirang_gen/regmap.py
+src/xirang_gen/tb.py
+src/xirang_gen/wrap.py
+src/xirang_gen.egg-info/PKG-INFO
+src/xirang_gen.egg-info/SOURCES.txt
+src/xirang_gen.egg-info/dependency_links.txt
+src/xirang_gen.egg-info/requires.txt
+src/xirang_gen.egg-info/top_level.txt

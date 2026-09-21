@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: xirang-back
+Version: 0.1.0
+Summary: XiRang tool drivers: synthesis and simulation
+Requires-Python: >=3.14

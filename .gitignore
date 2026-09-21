@@ -1,8 +1,11 @@
 .*
 !.git*
-__pycache__/
-*.pyc
 build/
-test/
+*.lock
+!xirang.lock
+*.bo
+*.ba
+*.vcd
+*.fst
+__pycache__/
 dist/
-*.egg-info/

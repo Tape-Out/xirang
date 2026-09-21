@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: xirang
+Version: 0.1.0
+Summary: XiRang xirang
+Requires-Python: >=3.14
+Requires-Dist: xirang-core
+Requires-Dist: xirang-gen
+Requires-Dist: xirang-area
+Requires-Dist: xirang-back
+Requires-Dist: xirang-out
+Requires-Dist: xirang-ws
+Requires-Dist: xirang-flow
+Requires-Dist: pyyaml

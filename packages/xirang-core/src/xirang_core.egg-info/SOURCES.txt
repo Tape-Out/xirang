@@ -1,0 +1,12 @@
+pyproject.toml
+src/xirang_core/__init__.py
+src/xirang_core/lock.py
+src/xirang_core/manifest.py
+src/xirang_core/matrix.py
+src/xirang_core/model.py
+src/xirang_core/resolve.py
+src/xirang_core.egg-info/PKG-INFO
+src/xirang_core.egg-info/SOURCES.txt
+src/xirang_core.egg-info/dependency_links.txt
+src/xirang_core.egg-info/requires.txt
+src/xirang_core.egg-info/top_level.txt

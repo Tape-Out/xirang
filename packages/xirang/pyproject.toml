@@ -12,6 +12,10 @@ dependencies = ['xirang-core', 'xirang-gen', 'xirang-area', 'xirang-back', 'xira
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# 模板是包数据：装好之后 ran new 零网络零 git
+[tool.setuptools.package-data]
+xirang = ["skel/skel.yaml", "skel/common/**/*", "skel/templates/**/*"]
+
 [project.scripts]
 xirang = "xirang.cli:main"
 ran = "xirang.cli:main"

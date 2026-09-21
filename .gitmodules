@@ -1,0 +1,3 @@
+[submodule "packages/xirang/src/xirang/skel"]
+	path = packages/xirang/src/xirang/skel
+	url = https://github.com/Tape-Out/xrskel.git

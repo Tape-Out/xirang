@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/banner.svg" width="374" alt="息壤 XiRang">
+<img src="docs/banner.svg" width="382" alt="息壤 XiRang">
 
 <a href="pyproject.toml"><img alt="python" src="https://img.shields.io/badge/python%203.14+-2E3440?style=flat-square"></a>
 <a href="https://github.com/Tape-Out/xrspec"><img alt="spec" src="https://img.shields.io/badge/spec%20v0.2.3-4C6A92?style=flat-square"></a>

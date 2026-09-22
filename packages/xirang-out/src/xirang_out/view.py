@@ -208,6 +208,12 @@ def show(pk: Pkg, idx: dict[str, Pkg]) -> str:
             L.append(f"  {_pad(k, 28)} {_pad(spec.get('type', ''), 8)} "
                      f"{_pad(dom, 40)} 默认 {spec.get('default', '—')}")
 
+    if prof := (pk.ip.get("profiles") or {}):
+        sets = prof.get("sets") or {}
+        L.append(f"档位 {len(sets)}  由 {prof.get('by')} 选")
+        for name, vals in sorted(sets.items()):
+            L.append(f"  {_pad(name, 28)} 改 {len(vals)} 项默认值")
+
     if gs := pk.guards():
         L.append(f"守卫 {len(gs)}")
         for g in gs:

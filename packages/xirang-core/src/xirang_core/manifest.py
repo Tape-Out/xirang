@@ -645,7 +645,13 @@ class Pkg:
         return None
 
     def knobs(self) -> dict[str, dict]:
-        """参数与特性合成一张表，层叠与求解都对着它做。"""
+        """参数与特性合成一张表，层叠与求解都对着它做。
+
+        存一份：`expose: all` 要扫上游的模板文件，而矩阵与守卫每个点都要问一次表。
+        cva6 一百个旋钮、两百多个点，不存就是几分钟对几秒。
+        """
+        if (got := getattr(self, "_knobs", None)) is not None:
+            return got
         out = {}
         for n, p in (self.ip.get("params") or {}).items():
             out[n] = {**p, "kind": "param", "type": p.get("type", "int")}
@@ -656,6 +662,7 @@ class Pkg:
         for n, spec in self._exposed().items():
             out.setdefault(n, spec)
         self._profiles(out)
+        self._knobs = out
         return out
 
     def _profiles(self, out: dict) -> None:

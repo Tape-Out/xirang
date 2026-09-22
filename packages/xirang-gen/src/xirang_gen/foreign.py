@@ -31,6 +31,60 @@ def bake(pkg: Pkg, vals) -> dict[str, int]:
     return out
 
 
+# 怎么认「一处定义」。上游的常量文件就这几种写法
+SYNTAX = {
+    "localparam": r"(localparam\s+(?:[A-Za-z_][\w:]*\s+)?{name}\s*=\s*)[^;]+",
+    "parameter": r"(parameter\s+(?:[A-Za-z_][\w:]*\s+)?{name}\s*=\s*)[^;]+",
+}
+
+
+def _lit(v) -> str:
+    """布尔写成 1/0：上游这些字段多是 0/1 的整数，`bit'(x)` 也吃得下。"""
+    if isinstance(v, bool):
+        return "1" if v else "0"
+    return str(v)
+
+
+def generate(pkg: Pkg, vals) -> list[tuple[str, int]]:
+    """按解出来的旋钮，从上游的常量文件生成一份我们自己的。
+
+    有一类上游的配置既不是 Verilog 参数、也不是宏，而是**一份写死的常量文件**：
+    CVA6 的 `cva6_config_pkg.sv` 是 49 个 `localparam`，`-D` 碰不到；它自己的扩展点
+    就是「编哪一个配置包」。这里做的正是那件事——拿上游的一份当模板，只换我们
+    暴露出去的那几项，其余保持上游值。**上游加了字段也不会漏**。
+
+    返回 [(产物路径, 换掉几处)]。
+    """
+    e = pkg.foreign_emit() or {}
+    out = []
+    knobs = {k: getattr(v, "value", v) for k, v in (vals or {}).items()}
+    for g in e.get("generate") or []:
+        if any(knobs.get(k) != v for k, v in (g.get("when") or {}).items()):
+            continue
+        src = pkg.root / g["from"]
+        if not src.is_file():
+            raise Bad(f"{pkg.name}: generate 的模板 {g['from']} 不在树上")
+        pat = SYNTAX[g.get("syntax", "localparam")]
+        txt = src.read_text(encoding="utf-8")
+        n = 0
+        for knob, name in (g.get("set") or {}).items():
+            if knob not in knobs:
+                raise Bad(f"{pkg.name}: generate 用了没解出取值的旋钮 {knob}")
+            txt, hit = re.subn(pat.format(name=re.escape(name)),
+                               lambda m: m.group(1) + _lit(knobs[knob]), txt)
+            if hit != 1:
+                raise Bad(f"{pkg.name}: 模板 {g['from']} 里 {name} 命中 {hit} 次，"
+                          f"要恰好一次——名字写错了，或者上游改了写法")
+            n += 1
+        dst = pkg.root / g["out"]
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        head = (f"// 息壤按解出来的旋钮生成，别手改。模板 {g['from']}"
+                + chr(10) + f"// 换了 {n} 处" + chr(10) * 2)
+        dst.write_text(head + txt, encoding="utf-8")
+        out.append((g["out"], n))
+    return out
+
+
 def defines(pkg: Pkg, vals=None) -> list[str]:
     """这份黑盒要带哪些宏。
 
@@ -144,6 +198,7 @@ def receipt(pkg: Pkg, vals) -> list[tuple[str, str]]:
     if not sv.available():
         return [("XR-FGN-003", f"{pkg.name}：装 pyslang 才核对得了黑盒声明"
                                f"（pip install xirang[sv]）")]
+    generate(pkg, vals)
     want = bake(pkg, vals)
     got = sv.elaborate(files(pkg, knobs=knobs_of(vals)), e["top"], want,
                        defines(pkg, vals), includes(pkg))
@@ -344,6 +399,7 @@ def elaborates(pkg: Pkg, vals) -> list[str]:
     e = pkg.foreign_emit()
     if e is None or not sv.available():
         return []
+    generate(pkg, vals)
     got = sv.elaborate(files(pkg, knobs=knobs_of(vals)), e["top"], bake(pkg, vals),
                        defines(pkg, vals), includes(pkg))
     if got is None:

@@ -72,7 +72,7 @@ DRIVERS = {"regs", "flat", "bsv", "assembly", "library", "foreign", "none"}
 
 # 黑盒声明认的键。黑盒不解析源码，这份声明就是它的全部形状。
 FOREIGN_KEYS = {"kind", "lang", "top", "rtl", "sim", "params", "defines",
-                "includes", "setup", "clock", "reset", "ports", "limits"}
+                "includes", "setup", "generate", "clock", "reset", "ports", "limits"}
 PORT_KEYS = {"endpoint", "kind", "role", "profile", "prefix", "type", "map"}
 EP_KINDS = {"transaction", "stream", "event", "physical"}
 
@@ -404,6 +404,8 @@ class Pkg:
                           f"少一项就接不上：顶层名与文件给源码闭包，ports 给端口到端点的对应")
             if e["lang"] not in LANGS:
                 raise Bad(f"{self.path}: foreign 的 lang={e['lang']} 不认识")
+            # generate 的产物由息壤自己写出来，落盘之前它当然不在树上
+            made = {g.get("out") for g in (e.get("generate") or [])}
             for k in ("rtl", "sim"):
                 fs = e.get(k)
                 if fs is None:
@@ -420,6 +422,8 @@ class Pkg:
                                 raise Bad(f"{self.path}: foreign 的 {k} 里 "
                                           f"when 用了不存在的旋钮 {w}")
                         f = f["path"]
+                    if f in made:
+                        continue
                     if not (self.root / f).is_file():
                         # 生成器类的上游：RTL 要先跑一遍对方的脚本才存在。
                         # 报「树上没有」等于把人晾在那里，要说清先跑什么
@@ -428,6 +432,16 @@ class Pkg:
                             hint = (f"——它是生成物，先跑 "
                                     f"`ran run {self.name} {setup}`")
                         raise Bad(f"{self.path}: foreign 的 {k} 列了树上没有的 {f}{hint}")
+            for g in e.get("generate") or []:
+                bad = set(g) - {"out", "from", "when", "set", "syntax"}
+                if bad or not g.get("out") or not g.get("from"):
+                    raise Bad(f"{self.path}: generate 的条目要写 out 与 from，"
+                              f"只认 out/from/when/set/syntax（多了 {sorted(bad)}）")
+                if g.get("syntax", "localparam") not in ("localparam", "parameter"):
+                    raise Bad(f"{self.path}: generate 的 syntax={g['syntax']} 不认识")
+                for k in list(g.get("set") or {}) + list(g.get("when") or {}):
+                    if k not in self.knobs():
+                        raise Bad(f"{self.path}: generate 用了不存在的旋钮 {k}")
             if setup := e.get("setup"):
                 if setup not in (self.ip.get("tasks") or {}):
                     raise Bad(f"{self.path}: foreign 的 setup 指向 {setup}，"

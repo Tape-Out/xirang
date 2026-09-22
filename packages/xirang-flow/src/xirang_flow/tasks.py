@@ -18,6 +18,7 @@ LiteX 与 retroSoC 都要先跑一遍它们自己的脚本。没有 `tasks:`，�
 跑完再接，那一步没人记得住，也没人验得了。
 """
 import graphlib
+import json
 import os
 import re
 import shlex
@@ -111,6 +112,16 @@ def holes(pkg: Pkg, vals, out) -> dict[str, str]:
     from xirang_gen import foreign
     if pkg.foreign_emit() is not None:
         d["defines"] = " ".join(f"-D{x}" for x in foreign.defines(pkg, vals))
+    # 有些上游的配置改不了宏：CVA6 的字段全是 localparam，`-D` 碰不到它们，
+    # 唯一的口子是它自己的 TARGET_CFG——换一个包。这类生成器要的是一份
+    # 「解出来的配置」文件，不是一串 -D。落盘一次，把路径给它
+    if vals:
+        out.mkdir(parents=True, exist_ok=True)
+        f = out / "resolved-knobs.json"
+        f.write_text(json.dumps({k: getattr(v, "value", v) for k, v in vals.items()},
+                                ensure_ascii=False, indent=2, sort_keys=True),
+                     encoding="utf-8")
+        d["resolved"] = str(f)
     return d
 
 

@@ -221,7 +221,20 @@ def cmd_list(args) -> int:
 def cmd_inspect(args) -> int:
     """把一颗解出来的芯片打印出来。打印的是解出来的那份，不是清单。"""
     res, pkgs = _resolve(args)
-    print(view.VIEWS[args.format](res, pkgs))
+    fmt = "deps" if args.deps else "pins" if args.pins else args.format
+    print(view.VIEWS[fmt](res, pkgs))
+    return 0
+
+
+def cmd_show(args) -> int:
+    """一个包的详情。`list` 先看得见，`show` 才看得清。"""
+    _, _, idx = find.open_(args.path)
+    pk = idx.get(args.top)
+    if pk is None:
+        near = difflib.get_close_matches(args.top, idx, 1)
+        raise Bad(f"搜索路径上没有包 {args.top}"
+                  + (f"，是不是 {near[0]}" if near else ""))
+    print(view.show(pk, idx))
     return 0
 
 
@@ -640,9 +653,15 @@ def main(argv=None) -> int:
     ls.add_argument("-k", "--kind", choices=["ip", "lib", "asm"])
     ls.set_defaults(fn=cmd_list)
 
+    sh = sub.add_parser("show", help="一个包的详情：旋钮、端点、依赖、被谁用")
+    sh.add_argument("top")
+    sh.set_defaults(fn=cmd_show)
+
     ins = sub.add_parser("inspect", help="打印实例、旋钮、端点、地址与面积")
     common(ins)
     ins.add_argument("-f", "--format", choices=list(view.VIEWS), default="text")
+    ins.add_argument("--deps", action="store_true", help="按依赖出树，不按实例")
+    ins.add_argument("--pins", action="store_true", help="只出物理端点")
     ins.set_defaults(fn=cmd_inspect)
 
     t = sub.add_parser("tree", help="装配层次")

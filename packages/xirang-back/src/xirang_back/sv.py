@@ -8,8 +8,6 @@ pyslang 是可选的（`pip install xirang[sv]`）。装不上就报「没法核
 """
 import dataclasses
 
-import pyslang
-
 
 @dataclasses.dataclass(frozen=True)
 class Port:
@@ -92,6 +90,7 @@ def elaborate(files, top: str, params: dict, defines=(), includes=()):
     """
     if not available():
         return None
+    from pyslang import TimeScale  # noqa: F401
     from pyslang import (Bag, DiagnosticEngine, DiagnosticSeverity,
                          SourceManager, TextDiagnosticClient, ast, syntax)
     from pyslang.parsing import PreprocessorOptions
@@ -102,7 +101,7 @@ def elaborate(files, top: str, params: dict, defines=(), includes=()):
     # 一份设计里有的文件写了 `timescale 有的没写，slang 就把「没写」当错误报。
     # 那是仿真的事，与「这组配置展不展得开」无关——pulp 的 hwpe 系列全是这样。
     # 给个默认值，缺的就按它算
-    o.defaultTimeScale = pyslang.TimeScale.fromString("1ns/1ps")
+    o.defaultTimeScale = TimeScale.fromString("1ns/1ps")
     c = ast.Compilation(Bag([o]))
     # 宏要跟 yosys 给的是同一套，否则两边看到的端口表不是同一份：picorv32 的
     # rvfi 那 177 根端口在 `RISCV_FORMAL` 里，不给宏它们压根不存在

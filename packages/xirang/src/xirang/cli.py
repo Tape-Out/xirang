@@ -226,6 +226,25 @@ def cmd_inspect(args) -> int:
     return 0
 
 
+def cmd_diffsigs(args) -> int:
+    """摘要失效时说清哪里变了。只说「失效了」等于把活丢回给人。"""
+    from xirang_area import price
+    _, _, idx = find.open_(args.path)
+    pk = idx.get(args.top)
+    if pk is None:
+        raise Bad(f"搜索路径上没有包 {args.top}")
+    rows, note = price.diffsigs(pk, args.rev)
+    if not rows:
+        print(f"{pk.name} 既没有寄存器图也没有源码，没什么可摘要的")
+        return 0
+    c = (pk.ip.get("area") or {}).get("corner") or {}
+    print(f"{pk.name}  记的 {c.get('gen_digest', '没记')}  现在 {price.gen_digest(pk)}")
+    print(view.table(("组成部分", "摘要", f"对比 {args.rev}"), rows))
+    print()
+    print(note)
+    return 0
+
+
 def cmd_show(args) -> int:
     """一个包的详情。`list` 先看得见，`show` 才看得清。"""
     _, _, idx = find.open_(args.path)
@@ -652,6 +671,11 @@ def main(argv=None) -> int:
     ls = sub.add_parser("list", help="搜索路径上有哪些包")
     ls.add_argument("-k", "--kind", choices=["ip", "lib", "asm"])
     ls.set_defaults(fn=cmd_list)
+
+    ds = sub.add_parser("diffsigs", help="价目表摘要失效时，说清是哪一部分变了")
+    ds.add_argument("top")
+    ds.add_argument("--rev", default="HEAD", help="源码跟哪个提交比，默认 HEAD")
+    ds.set_defaults(fn=cmd_diffsigs)
 
     sh = sub.add_parser("show", help="一个包的详情：旋钮、端点、依赖、被谁用")
     sh.add_argument("top")

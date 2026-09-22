@@ -12,6 +12,7 @@ sv2v 做不了这件事：实测 `--top` 只删没被例化的模块，`paramete
 SystemVerilog 到 Verilog-2005 的翻译器，与展开参数是两件事。
 """
 import pathlib
+import re
 import subprocess
 
 from .tools import ToolError, need
@@ -67,6 +68,9 @@ def elaborate(files, top: str, params: dict, out: pathlib.Path,
     files = list(files)
     here = root
     if any(str(f).endswith(".sv") for f in files):
+        files, cut = strip_sim(files, out.parent / "_synth")
+        if cut:
+            print(f"  抹掉 {cut} 段 translate_off（上游标明不进综合）")
         files = [to_v2005(files, out.with_suffix(".sv2v.v"), top, defines, includes)]
         defines = includes = ()   # 宏与 include 在翻译那一步就处理掉了
         here = out.parent
@@ -111,6 +115,46 @@ def schematic(files, top: str, params: dict, out: pathlib.Path,
     if r.returncode != 0 or not svg.is_file():
         raise ToolError(f"画 {top} 的拓扑图失败：" + _tail(r))
     return svg
+
+
+SIM_OFF = re.compile(r"//\s*(?:synopsys|synthesis|pragma)\s+translate_off(?![A-Za-z0-9_])")
+SIM_ON = re.compile(r"//\s*(?:synopsys|synthesis|pragma)\s+translate_on(?![A-Za-z0-9_])")
+
+
+def strip_sim(files, work: pathlib.Path) -> tuple[list[pathlib.Path], int]:
+    """抹掉 `translate_off` 与 `translate_on` 之间的代码，行号照旧。
+
+    这对 pragma 是上游明写的「这一段不进综合」。商用综合器认它，sv2v 不认——
+    它把注释连同 pragma 一起去掉，于是仿真专用的东西原样流到 yosys 面前。CVA6 的
+    指令追踪器正是这样：`ifndef VERILATOR` 一支用 SystemVerilog 的类，`else` 一支用
+    `string` 开文件，两支都不是要流片的那份，而给不给宏都躲不开。
+
+    抹掉的行换成空行，报错里的行号才还对得上源文件。
+    """
+    work.mkdir(parents=True, exist_ok=True)
+    out, cut = [], 0
+    for f in files:
+        f = pathlib.Path(f)
+        txt = f.read_text(encoding="utf-8", errors="replace")
+        if not SIM_OFF.search(txt):
+            out.append(f)
+            continue
+        keep, off = [], False
+        for line in txt.splitlines():
+            if not off and SIM_OFF.search(line):
+                off, cut = True, cut + 1
+            if off:
+                keep.append("")
+                if SIM_ON.search(line):
+                    off = False
+            else:
+                keep.append(line)
+        # 同名会撞（vendor 里好几个 fifo_v3.sv），按来源路径造唯一名
+        tag = str(f).strip("/").replace("/", "_").replace("\\", "_")
+        dst = work / tag
+        dst.write_text(chr(10).join(keep) + chr(10), encoding="utf-8")
+        out.append(dst)
+    return out, cut
 
 
 def to_v2005(files, out: pathlib.Path, top: str | None = None,

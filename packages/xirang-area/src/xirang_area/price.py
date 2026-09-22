@@ -204,6 +204,79 @@ def annotate(res: Resolved, pkgs: dict[str, Pkg]) -> Resolved:
     return res
 
 
+def gen_parts(pkg: Pkg) -> list[tuple[str, str]]:
+    """摘要的组成部分，带名字。**顺序与内容必须与从前一致**，否则全库价目表一起失效。
+
+    拆开是为了失效时说得出「哪里变了」：生成器改了还是这个包自己的源码改了，
+    两者的处置完全不同——前者重测即可，后者要先看设计。
+    """
+    from xirang_core.resolve import resolve_pkg
+    from xirang_gen.regmap import bsv
+    from xirang_gen.wrap import flat_emit, wrap
+
+    # 没有寄存器图的 IP 也要有摘要。原来一见 regmap 为空就返回 None，
+    # 于是 sram 这种纯手写的 IP 完全没有失效检测——改了实现，价目表照旧。
+    out: list[tuple[str, str]] = []
+    if pkg.regmap:
+        out.append(("生成:寄存器组", bsv(pkg)))
+        # 包装层也是生成的，也进面积。只取默认配置那一份即可——
+        # 生成器一变，这一份就跟着变。
+        if flat_emit(pkg) is not None:
+            out.append(("生成:包装层", wrap(pkg, resolve_pkg(pkg, {}, "digest", None, {}))))
+    # 手写的源码也要进摘要。只看生成物的话，改了 IP 自己的逻辑（uart 的取数、
+    # spi 的采样、timer 的比较）面积明明变了却没人报警——那正是这套机制
+    # 当初要防的「悄悄失效」。
+    for src in pkg.dirs("hwsrc"):
+        if not src.is_dir():
+            continue
+        for f in sorted(list(src.rglob("*.bsv")) + list(src.rglob("*.bs"))):
+            out.append((f"源码:{f.relative_to(pkg.root)}", f.read_text(encoding="utf-8")))
+    return out
+
+
+def part_digests(pkg: Pkg) -> dict[str, str]:
+    import hashlib
+    return {k: hashlib.sha256(t.encode()).hexdigest()[:12] for k, t in gen_parts(pkg)}
+
+
+def diffsigs(pkg: Pkg, rev: str = "HEAD") -> tuple[list[tuple[str, str, str]], str]:
+    """摘要失效时说清哪里变了，而不只是说失效了。
+
+    生成的那几部分与源码分开报。源码逐个与 `rev` 比字节：**一个都没动而摘要又对不上，
+    那差异只可能来自生成器**——那是改了息壤、全库价目表一起失效的那种情形，重测即可，
+    不必去看设计。
+    """
+    import subprocess
+
+    now = part_digests(pkg)
+    rows, moved = [], []
+    for label, cur in now.items():
+        if not label.startswith("源码:"):
+            rows.append((label, cur, "生成物"))
+            continue
+        rel = label.removeprefix("源码:")
+        r = subprocess.run(["git", "-C", str(pkg.root), "show", f"{rev}:{rel}"],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            rows.append((label, cur, f"{rev} 里没有这个文件"))
+            moved.append(label)
+            continue
+        old = (pkg.root / rel).read_text(encoding="utf-8")
+        same = r.stdout == old
+        rows.append((label, cur, "未改" if same else f"与 {rev} 不同"))
+        if not same:
+            moved.append(label)
+    c = (pkg.ip.get("area") or {}).get("corner") or {}
+    stale_now = c.get("gen_digest") not in (None, gen_digest(pkg))
+    if not stale_now:
+        note = "价目表没失效"
+    elif moved:
+        note = f"源码动了（{len(moved)} 个文件），面积失效是应该的——先看设计再重测"
+    else:
+        note = "源码一个字节都没动，差异只能来自生成器：重测即可"
+    return rows, note
+
+
 def gen_digest(pkg: Pkg) -> str | None:
     """当前生成器会为这个包吐出什么——对产物取摘要。
 
@@ -212,24 +285,7 @@ def gen_digest(pkg: Pkg) -> str | None:
     """
     import hashlib
 
-    from xirang_core.resolve import resolve_pkg
-    from xirang_gen.regmap import bsv
-    from xirang_gen.wrap import flat_emit, wrap
-    # 没有寄存器图的 IP 也要有摘要。原来一见 regmap 为空就返回 None，
-    # 于是 sram 这种纯手写的 IP 完全没有失效检测——改了实现，价目表照旧。
-    parts = [bsv(pkg)] if pkg.regmap else []
-    # 包装层也是生成的，也进面积。只取默认配置那一份即可——
-    # 生成器一变，这一份就跟着变。
-    if pkg.regmap and flat_emit(pkg) is not None:
-        parts.append(wrap(pkg, resolve_pkg(pkg, {}, "digest", None, {})))
-    # 手写的源码也要进摘要。只看生成物的话，改了 IP 自己的逻辑（uart 的取数、
-    # spi 的采样、timer 的比较）面积明明变了却没人报警——那正是这套机制
-    # 当初要防的「悄悄失效」。
-    for src in pkg.dirs("hwsrc"):
-        if not src.is_dir():
-            continue
-        for f in sorted(list(src.rglob("*.bsv")) + list(src.rglob("*.bs"))):
-            parts.append(f.read_text(encoding="utf-8"))
+    parts = [t for _, t in gen_parts(pkg)]
     if not parts:
         return None
     return "sha256:" + hashlib.sha256("".join(parts).encode()).hexdigest()[:16]

@@ -1,5 +1,6 @@
 """读 ip.yaml 与 regmap.yaml，带行号。行号是 computed 面板第二问的答案来源。"""
 import pathlib
+import re
 
 import yaml
 
@@ -100,6 +101,27 @@ def slow_ctrl(emit: dict, vals) -> bool:
         return False
     sw = emit.get("slow_when")
     return sw is True or bool(vals[sw].value)
+
+
+
+# 从上游的常量文件里认出「一个可配置项」。`generate.expose: all` 用它
+FIND = {
+    "localparam": r"(?m)^[ 	]*localparam[ 	]+(?:[A-Za-z_][\w:]*[ 	]+)?(\w+)[ 	]*=[ 	]*([^;]+);",
+    "parameter": r"(?m)^[ 	]*parameter[ 	]+(?:[A-Za-z_][\w:]*[ 	]+)?(\w+)[ 	]*=[ 	]*([^;]+);",
+}
+
+
+def _guess(raw: str):
+    """从上游写的默认值猜类型。猜不出就不暴露——宁可少给，不给错的。"""
+    t = raw.strip()
+    if t in ("1'b0", "1'b1"):
+        return "bool", t == "1'b1"
+    if t.isdigit():
+        return "int", int(t)
+    m = re.fullmatch(r"\d+'([dh])([0-9a-fA-F_]+)", t)
+    if m:
+        return "int", int(m.group(2).replace("_", ""), 16 if m.group(1) == "h" else 10)
+    return None, None
 
 
 class Pkg:
@@ -433,10 +455,12 @@ class Pkg:
                                     f"`ran run {self.name} {setup}`")
                         raise Bad(f"{self.path}: foreign 的 {k} 列了树上没有的 {f}{hint}")
             for g in e.get("generate") or []:
-                bad = set(g) - {"out", "from", "when", "set", "syntax"}
+                bad = set(g) - {"out", "from", "when", "set", "syntax",
+                                "expose", "skip", "domain"}
                 if bad or not g.get("out") or not g.get("from"):
                     raise Bad(f"{self.path}: generate 的条目要写 out 与 from，"
-                              f"只认 out/from/when/set/syntax（多了 {sorted(bad)}）")
+                              f"只认 out/from/when/set/syntax/expose/skip/domain"
+                              f"（多了 {sorted(bad)}）")
                 if g.get("syntax", "localparam") not in ("localparam", "parameter"):
                     raise Bad(f"{self.path}: generate 的 syntax={g['syntax']} 不认识")
                 for k in list(g.get("set") or {}) + list(g.get("when") or {}):
@@ -524,4 +548,35 @@ class Pkg:
             out[n] = {**p, "kind": "param", "type": p.get("type", "int")}
         for n, f in (self.ip.get("features") or {}).items():
             out[n] = {**f, "kind": "feature", "type": f.get("type", "bool")}
+        # `generate.expose: all`：把上游那份常量文件本身当旋钮的来源。
+        # 手抄一张映射表迟早与上游对不上，而上游加了字段我们也不会知道
+        for n, spec in self._exposed().items():
+            out.setdefault(n, spec)
+        return out
+
+    def _exposed(self) -> dict[str, dict]:
+        out: dict[str, dict] = {}
+        for e in self.ip.get("emit", []) or []:
+            if e.get("kind") != "foreign":
+                continue
+            for g in e.get("generate") or []:
+                if g.get("expose") != "all":
+                    continue
+                src = self.root / g.get("from", "")
+                if not src.is_file():
+                    continue
+                skip = set(g.get("skip") or ())
+                dom = g.get("domain") or {}
+                for name, raw in re.findall(FIND[g.get("syntax", "localparam")],
+                                            src.read_text(encoding="utf-8")):
+                    if name in skip or name in out:
+                        continue
+                    kind, default = _guess(raw)
+                    if kind is None:
+                        continue      # 引用别的常量、枚举、表达式：认不出就不暴露
+                    out[name] = ({"type": "choice", "values": dom[name],
+                                  "default": default, "kind": "param"}
+                                 if name in dom else
+                                 {"type": kind, "default": default,
+                                  "kind": "feature" if kind == "bool" else "param"})
         return out

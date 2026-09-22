@@ -67,7 +67,15 @@ def generate(pkg: Pkg, vals) -> list[tuple[str, int]]:
         pat = SYNTAX[g.get("syntax", "localparam")]
         txt = src.read_text(encoding="utf-8")
         n = 0
-        for knob, name in (g.get("set") or {}).items():
+        pairs = dict(g.get("set") or {})
+        if g.get("expose") == "all":
+            # 暴露出来的旋钮名就是文件里的标识符，一一对应。**按这一条自己的模板取**：
+            # 几份模板的字段集不一样（CVA6 的 32 位那份没有 BExtEn），取并集会让
+            # 「必须恰好命中一次」在另一份上炸掉
+            from xirang_core.manifest import FIND
+            mine = {m[0] for m in re.findall(FIND[g.get("syntax", "localparam")], txt)}
+            pairs |= {k: k for k in knobs if k in mine}
+        for knob, name in pairs.items():
             if knob not in knobs:
                 raise Bad(f"{pkg.name}: generate 用了没解出取值的旋钮 {knob}")
             txt, hit = re.subn(pat.format(name=re.escape(name)),

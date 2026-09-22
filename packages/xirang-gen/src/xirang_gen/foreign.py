@@ -1,5 +1,6 @@
 """黑盒的参数投影：把解出来的旋钮值摆成上游 Verilog 参数的值。"""
 import pathlib
+import re
 
 from xirang_back import sv
 from xirang_core.manifest import Bad, Pkg
@@ -94,7 +95,16 @@ def _camel(name: str) -> str:
     读的人得回去查表。
     """
     if "_" not in name:
-        return name[:1].lower() + name[1:]
+        # 开头连着几个大写要整段降格，否则 RV32E 变成 rV32E、MHPMCounterNum 变成
+        # mHPMCounterNum。最后一个大写若后面跟着小写，那它是下一个词的头，留着
+        m = re.match(r"[A-Z]+", name)
+        if not m:
+            return name
+        run = m.group(0)
+        tail = name[len(run):]
+        if len(run) > 1 and tail[:1].islower():
+            return run[:-1].lower() + run[-1] + tail
+        return run.lower() + tail
     a, *rest = name.split("_")
     return a.lower() + "".join(w[:1].upper() + w[1:].lower() for w in rest)
 

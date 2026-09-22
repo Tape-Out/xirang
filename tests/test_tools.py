@@ -17,7 +17,7 @@ from xirang_back import tools
 from xirang_back.iv import _short
 from xirang_back.verilog import script
 from xirang_core.manifest import Bad
-from xirang_gen.foreign import bake
+from xirang_gen.foreign import _camel, bake
 
 
 def val(v):
@@ -75,6 +75,15 @@ def main() -> int:
         bad.append("短标签不该被动")
     if _short(long) == _short(long + "x"):
         bad.append("截短之后两个不同的点撞名了")
+
+    # 旋钮名由上游参数名机械推出来，不需要一张要人维护的对照表。两种上游命名都有：
+    # picorv32 全大写加下划线，ibex 本来就是驼峰。一律先小写会把后者毁掉
+    for src, want in (("ENABLE_MUL", "enableMul"), ("PROGADDR_RESET", "progaddrReset"),
+                      ("BusSizeECC", "busSizeECC"), ("RV32E", "rv32E"),
+                      ("MHPMCounterNum", "mhpmCounterNum"), ("ICache", "iCache"),
+                      ("PMPEnable", "pmpEnable")):
+        if _camel(src) != want:
+            bad.append(f"{src} 推成了 {_camel(src)}，应是 {want}")
 
     # 参数投影：布尔按 1/0，字面值照用
     got = bake(PKG, {"enableMul": val(True), "progaddrReset": val(0x10000)})

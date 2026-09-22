@@ -250,11 +250,24 @@ def _check_guards(root: Pkg, insts: list[Instance], search):
     """
     def rec(pkg: Pkg, here: list[Instance]):
         if pkg.guards():
-            flat = {f"{i.name}.{k}": v.value
-                    for i in here for k, v in i.values.items()}
-            if hit := pkg.offends(flat):
-                raise Bad(f"{pkg.name}：{hit[0]}={flat[hit[0]]} 被守卫排除了："
-                          f"{hit[1]}")
+            cell = {f"{i.name}.{k}": v for i in here for k, v in i.values.items()}
+            # 与包内守卫同一个规矩：默认带出来的就地修正，写进 with: 的报错
+            for _ in range(len(pkg.guards()) + 1):
+                hit = pkg.offends({k: v.value for k, v in cell.items()})
+                if hit is None:
+                    break
+                key, why = hit
+                if cell[key].winner.layer in ("instance", "cli"):
+                    raise Bad(f"{pkg.name}：{key}={cell[key].value} "
+                              f"被守卫排除了：{why}")
+                keep = [v for g in pkg.guards()
+                        if all(a in cell and cell[a].value == b
+                               for a, b in g["when"].items())
+                        for v in g["narrow"].get(key, [])]
+                cell[key].value = keep[0]
+                cell[key].forced_by = f"guard: {why}"
+            else:
+                raise Bad(f"{pkg.name}：守卫求解不收敛，检查 guards 是否互相成环")
         for i in here:
             if i.children:
                 rec(_find_pkg(i.of, search), i.children)

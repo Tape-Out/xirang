@@ -120,7 +120,76 @@ def main() -> int:
         if active_range(txt, "T_FLEN", {"T_RVD": 2}) != (0, 64):
             bad.append("rvd=y 时 flen 的区间被连累了")
 
-        # 五、清单自己要站得住
+        # 五、跨包：装配用点号伸进子实例的旋钮，子包自己看不见这条约束
+        soc = pathlib.Path(d) / "soc"
+        (soc / "hwsrc").mkdir(parents=True, exist_ok=True)
+        (soc / "hwsrc/S.bsv").write_text("package S; endpackage", encoding="utf-8")
+        (soc / "ip.yaml").write_text(yaml.safe_dump({
+            "name": "soc", "version": "0.1.0", "spec": "0.1", "kind": "ip",
+            "lang": "bsv",
+            "contract": {"version": 1,
+                         "ctrl": {"shape": "flat", "aw": 8, "dw": 32}},
+            "instances": [{"name": "fpu", "of": "t", "addr": 0}],
+            "guards": [{"when": {"fpu.rvf": False},
+                        "narrow": {"fpu.flen": [0]},
+                        "why": "没有浮点单元时浮点位宽只能是零"}],
+        }, allow_unicode=True), encoding="utf-8")
+        from xirang_core.resolve import resolve as _res
+        r = _res("soc", [pathlib.Path(d)], cli={"rvf": False})
+        got = r.instances[0].values["flen"]
+        if got.value != 0 or "浮点位宽" not in (got.forced_by or ""):
+            bad.append(f"装配的守卫没伸进子实例：flen={got.value} "
+                       f"{got.forced_by}")
+        try:
+            _res("soc", [pathlib.Path(d)], cli={"rvf": False, "flen": 32})
+            bad.append("跨包守卫：显式写死的值没报错")
+        except Bad as e:
+            if "浮点位宽" not in str(e):
+                bad.append(f"跨包守卫报错没引用 why：{e}")
+
+        # 六、档位只是一组默认值：换一档，那几个旋钮的默认跟着变，
+        # 而且照样能被命令行盖过去。不这么做就会有两种配置方式并存
+        pf = pathlib.Path(d) / "pf"
+        (pf / "hwsrc").mkdir(parents=True, exist_ok=True)
+        (pf / "hwsrc/P.bsv").write_text("package P; endpackage", encoding="utf-8")
+        (pf / "ip.yaml").write_text(yaml.safe_dump({
+            **BASE, "name": "pf",
+            "params": {**BASE["params"],
+                       "line": {"type": "choice", "values": ["slim", "fat"],
+                                "default": "slim"}},
+            "profiles": {"by": "line",
+                         "sets": {"fat": {"flen": 64}, "slim": {"flen": 0}}},
+            "guards": [],
+        }, allow_unicode=True), encoding="utf-8")
+        from xirang_core.resolve import resolve as _r3
+        got = {g: _r3("pf", [pathlib.Path(d)], cli={"line": g})
+               .instances[0].values["flen"].value for g in ("slim", "fat")}
+        if got != {"slim": 0, "fat": 64}:
+            bad.append(f"档位没换掉默认值：{got}")
+        over = _r3("pf", [pathlib.Path(d)], cli={"line": "fat", "flen": 32})
+        if over.instances[0].values["flen"].value != 32:
+            bad.append("档位盖过了命令行——层叠次序反了")
+        pk2 = Pkg(pf)
+        if pk2.settled({"line": "fat"})["flen"] != 64:
+            bad.append("矩阵看到的默认值没跟着档位走")
+        for ip, want in [
+            ({**BASE, "name": "pf", "profiles": {"by": "nope", "sets": {}}},
+             "不存在的旋钮"),
+            ({**BASE, "name": "pf",
+              "params": {**BASE["params"],
+                         "line": {"type": "choice", "values": ["slim"],
+                                  "default": "slim"}},
+              "profiles": {"by": "line", "sets": {"fat": {"flen": 64}}}},
+             "取值域里"),
+        ]:
+            try:
+                mk(pathlib.Path(d) / "q", ip).knobs()
+                bad.append(f"清单里 {want} 那一条没被拦住")
+            except Bad as e:
+                if want not in str(e):
+                    bad.append(f"拦住了但话没说对：{e}")
+
+        # 七、清单自己要站得住
         for ip, want in [
             ({**BASE, "guards": [{"when": {"rvf": False},
                                   "narrow": {"rvd": [False]}}]}, "why"),

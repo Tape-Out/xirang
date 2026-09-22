@@ -87,7 +87,7 @@ TOP_KEYS = {*DIR_KEYS,
             "name", "version", "spec", "kind", "lang", "identity", "contract",
             "params", "features", "constraints", "area", "emit", "deps",
             "bus", "instances", "connect", "pipe", "test", "diagnostics",
-            "targets", "tasks", "guards", "__path__"}
+            "targets", "tasks", "guards", "profiles", "__path__"}
 
 
 def slow_ctrl(emit: dict, vals) -> bool:
@@ -108,7 +108,15 @@ def slow_ctrl(emit: dict, vals) -> bool:
 FIND = {
     "localparam": r"(?m)^[ 	]*localparam[ 	]+(?:[A-Za-z_][\w:]*[ 	]+)?(\w+)[ 	]*=[ 	]*([^;]+);",
     "parameter": r"(?m)^[ 	]*parameter[ 	]+(?:[A-Za-z_][\w:]*[ 	]+)?(\w+)[ 	]*=[ 	]*([^;]+);",
+    # 结构体字面量的一项：`XLEN: unsigned'(64),`。带强转时取括号里那一截
+    "field": r"(?m)^[ 	]*(\w+):[ 	]*(?:[A-Za-z_]\w*'\()?([^,\n]*?)\)?[ 	]*,",
 }
+
+
+def _syntaxes(g: dict) -> list[str]:
+    """一份模板里可以有两种写法：常量在上面，结构体字面量在下面。"""
+    sx = g.get("syntax", "localparam")
+    return sx if isinstance(sx, list) else [sx]
 
 
 def _guess(raw: str):
@@ -121,6 +129,8 @@ def _guess(raw: str):
     m = re.fullmatch(r"\d+'([dh])([0-9a-fA-F_]+)", t)
     if m:
         return "int", int(m.group(2).replace("_", ""), 16 if m.group(1) == "h" else 10)
+    if re.fullmatch(r"[A-Za-z_]\w*::\w+", t):
+        return "enum", t      # 有几档只有上游知道，清单不给就不暴露
     return None, None
 
 
@@ -465,8 +475,9 @@ class Pkg:
                     raise Bad(f"{self.path}: generate 的条目要写 out 与 from，"
                               f"只认 out/from/when/set/syntax/expose/skip/domain"
                               f"（多了 {sorted(bad)}）")
-                if g.get("syntax", "localparam") not in ("localparam", "parameter"):
-                    raise Bad(f"{self.path}: generate 的 syntax={g['syntax']} 不认识")
+                for sx in _syntaxes(g):
+                    if sx not in FIND:
+                        raise Bad(f"{self.path}: generate 的 syntax={sx} 不认识")
                 for k in list(g.get("set") or {}) + list(g.get("when") or {}):
                     if k not in self.knobs():
                         raise Bad(f"{self.path}: generate 用了不存在的旋钮 {k}")
@@ -644,7 +655,34 @@ class Pkg:
         # 手抄一张映射表迟早与上游对不上，而上游加了字段我们也不会知道
         for n, spec in self._exposed().items():
             out.setdefault(n, spec)
+        self._profiles(out)
         return out
+
+    def _profiles(self, out: dict) -> None:
+        """上游那些现成配置不是另一种配置方式，只是一组默认值。
+
+        把它们当成「选哪份文件」会长出两套语义：一套设字段，一套换文件，于是
+        每个旋钮都要回答「我现在起不起作用」。一档只是一组默认值，就没有这个问题。
+        """
+        prof = self.ip.get("profiles") or {}
+        if not prof:
+            return
+        bad = set(prof) - {"by", "sets"}
+        by, sets = prof.get("by"), prof.get("sets") or {}
+        if bad or by is None:
+            raise Bad(f"{self.path}: profiles 要写 by 与 sets"
+                      f"（多了 {sorted(bad)}）")
+        if by not in out:
+            raise Bad(f"{self.path}: profiles.by 指向不存在的旋钮 {by}")
+        for name, vals in sets.items():
+            if name not in (out[by].get("values") or []):
+                raise Bad(f"{self.path}: 档位 {name} 不在 {by} 的取值域里")
+            for k, v in vals.items():
+                if k not in out:
+                    raise Bad(f"{self.path}: 档位 {name} 设了不存在的旋钮 {k}")
+                if v != out[k].get("default"):
+                    out[k].setdefault("when_default", []).append(
+                        {"when": {by: name}, "value": v})
 
     def _exposed(self) -> dict[str, dict]:
         """上游那几份模板各扫一遍。同一个常量在不同模板里取值不同时，
@@ -663,17 +701,21 @@ class Pkg:
                 if not src.is_file():
                     continue
                 skip = set(g.get("skip") or ())
-                for name, raw in re.findall(FIND[g.get("syntax", "localparam")],
-                                            src.read_text(encoding="utf-8")):
-                    kind, default = _guess(raw)
-                    if name in skip or kind is None:
-                        continue   # 引用别的常量、枚举、表达式：认不出就不暴露
-                    got.setdefault(name, []).append(
-                        (g.get("when") or {}, kind, default, g.get("domain") or {}))
+                txt = src.read_text(encoding="utf-8")
+                for sx in _syntaxes(g):
+                    for name, raw in re.findall(FIND[sx], txt):
+                        kind, default = _guess(raw)
+                        if name in skip or kind is None:
+                            continue   # 引用别的常量、表达式：认不出就不暴露
+                        got.setdefault(name, []).append(
+                            (g.get("when") or {}, kind, default,
+                             g.get("domain") or {}))
 
         out: dict[str, dict] = {}
         for name, rows in got.items():
-            when0, kind, default, dom = rows[0]
+            _, kind, default, dom = rows[0]
+            if kind == "enum" and name not in dom:
+                continue
             spec = ({"type": "choice", "values": dom[name], "default": default,
                      "kind": "param"} if name in dom else
                     {"type": kind, "default": default,

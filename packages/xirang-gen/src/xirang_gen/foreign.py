@@ -3,7 +3,7 @@ import pathlib
 import re
 
 from xirang_back import sv
-from xirang_core.manifest import Bad, Pkg
+from xirang_core.manifest import Bad, Pkg, _syntaxes
 
 
 def bake(pkg: Pkg, vals) -> dict[str, int]:
@@ -33,6 +33,7 @@ def bake(pkg: Pkg, vals) -> dict[str, int]:
 
 # 怎么认「一处定义」。上游的常量文件就这几种写法
 SYNTAX = {
+    "field": r"(?m)^([ 	]*{name}:[ 	]*(?:[A-Za-z_]\w*'\()?)[^,)\n]*",
     "localparam": r"(localparam\s+(?:[A-Za-z_][\w:]*\s+)?{name}\s*=\s*)[^;]+",
     "parameter": r"(parameter\s+(?:[A-Za-z_][\w:]*\s+)?{name}\s*=\s*)[^;]+",
 }
@@ -64,7 +65,6 @@ def generate(pkg: Pkg, vals) -> list[tuple[str, int]]:
         src = pkg.root / g["from"]
         if not src.is_file():
             raise Bad(f"{pkg.name}: generate 的模板 {g['from']} 不在树上")
-        pat = SYNTAX[g.get("syntax", "localparam")]
         txt = src.read_text(encoding="utf-8")
         n = 0
         pairs = dict(g.get("set") or {})
@@ -73,11 +73,17 @@ def generate(pkg: Pkg, vals) -> list[tuple[str, int]]:
             # 几份模板的字段集不一样（CVA6 的 32 位那份没有 BExtEn），取并集会让
             # 「必须恰好命中一次」在另一份上炸掉
             from xirang_core.manifest import FIND
-            mine = {m[0] for m in re.findall(FIND[g.get("syntax", "localparam")], txt)}
+            mine = {}
+            for sx in _syntaxes(g):
+                for m in re.findall(FIND[sx], txt):
+                    mine.setdefault(m[0], sx)
             pairs |= {k: k for k in knobs if k in mine}
+        else:
+            mine = dict.fromkeys(pairs.values(), _syntaxes(g)[0])
         for knob, name in pairs.items():
             if knob not in knobs:
                 raise Bad(f"{pkg.name}: generate 用了没解出取值的旋钮 {knob}")
+            pat = SYNTAX[mine.get(name, _syntaxes(g)[0])]
             txt, hit = re.subn(pat.format(name=re.escape(name)),
                                lambda m: m.group(1) + _lit(knobs[knob]), txt)
             if hit != 1:

@@ -10,11 +10,13 @@ import sys
 
 from xirang_back.sim import schedule, sim
 from xirang_core.manifest import GEN_HW, GEN_SW, GEN_TEST, Pkg
-from xirang_core.resolve import resolve
+from xirang_core.matrix import points
+from xirang_core.resolve import resolve, resolve_pkg
 from xirang_gen.assemble import assemble
 from xirang_gen.regmap import generate as gen_regmap
 
 from .logs import tail
+from .matrix import run_gens
 from .report import Gate, Lib, Mark, Row
 
 
@@ -97,10 +99,14 @@ def _note(ok: bool, log: str) -> str:
 
 def library(pkg: Pkg, index: dict[str, Pkg], *,
             out: pathlib.Path, clean: bool = False) -> Lib:
-    """库包的行为测试：没有旋钮就没有矩阵，`htest/*Tb.bsv` 直接编直接跑。
+    """库包的行为测试，逐个矩阵点跑。
 
-    地址图、写选通合并、总线绑定器都住在库包里，错了会影响每一个 IP——
-    此前它们一条行为测试都没有，只做了类型检查。
+    地址图、写选通合并、总线绑定器都住在库包里，错了会影响每一个 IP。而库包
+    恰恰是全库参数化最彻底的东西——`Apb4` 从头到尾按 `aw`/`dw` 写，测试台却
+    钉死在一种位宽上。**没有旋钮就没有矩阵**这句话原本是循环的：它没有旋钮，
+    正因为工具从来没给过它矩阵。
+
+    没有旋钮的库包只有一个点，与从前逐字节相同。
     """
     tb = next((x for x in pkg.dirs("htest") if x.is_dir()), pkg.root / GEN_TEST)
     tbs = sorted(tb.glob("*Tb.bsv")) if tb.is_dir() else []
@@ -108,11 +114,22 @@ def library(pkg: Pkg, index: dict[str, Pkg], *,
     if not tbs:
         return rep
     _fresh(out, clean)
-    (out / "b").mkdir(parents=True, exist_ok=True)
     srcs = [str(d) for p in index.values() for d in p.dirs("hwsrc")]
-    for f in tbs:
-        top = "mk" + f.stem
-        path = ":".join([str(tb), *srcs, "+"])
-        ok, log = sim(top, f, path, out / "b")
-        rep.rows.append(Row(label=top, mark=Mark.ok if ok else Mark.bad, note=_note(ok, log)))
+    pts = points(pkg)
+    many = len(pts) > 1
+    for label, ov, _ in pts:
+        vals = resolve_pkg(pkg, {}, f"{pkg.path} (matrix)", None, dict(ov))
+        here = out / (label if many else "b")
+        gen = here / GEN_HW
+        gen.mkdir(parents=True, exist_ok=True)
+        if err := run_gens(pkg, gen, label, {k: v.value for k, v in vals.items()}):
+            rep.rows.append(Row(label=label, mark=Mark.bad, note=err))
+            continue
+        path = ":".join([str(gen), str(tb), *srcs, "+"])
+        for f in tbs:
+            top = "mk" + f.stem
+            ok, log = sim(top, f, path, here / "b")
+            rep.rows.append(Row(label=f"{top} @ {label}" if many else top,
+                                mark=Mark.ok if ok else Mark.bad,
+                                note=_note(ok, log)))
     return rep

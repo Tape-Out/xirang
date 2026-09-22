@@ -24,7 +24,10 @@ from .target import Ctx, target
 
 
 def _sym(*parts) -> str:
-    return "_".join(p.upper().replace("-", "_") for p in parts if p)
+    # 档位的取值可能是整数，也可能是 config_pkg::WT 这样的枚举，
+    # 符号名一律按字符串拼——收口在这里，调用处不各自 str 一遍
+    return "_".join(str(p).upper().replace("-", "_").replace(":", "_")
+                    for p in parts if p not in (None, ""))
 
 
 # ---------------------------------------------------------------- fusesoc
@@ -148,15 +151,22 @@ def _gates(pkg, prefix: str, name: str, knobs: dict) -> tuple[list[str], list[st
     return lines, per_val
 
 
-def _knob_entries(inst: Instance, pkg, prefix: str) -> list[str]:
+def _knob_entries(inst: Instance, pkg, prefix: str,
+                  chipsym: dict | None = None) -> list[str]:
     L = []
     knobs = pkg.knobs()
+    chipsym = chipsym or {}
+    up = pkg.inherits()
     for name, v in inst.values.items():
         spec = knobs.get(name, {})
         sym = _sym(prefix, name)
         desc = spec.get("desc") or name
         if spec.get("type") == "bool":
-            L += [f'config {sym}', f'	bool "{desc}"']
+            L += [f'config {sym}'] + (
+                ["	bool"] if up.get(name, {}).get("lock")
+                else [f'	bool "{desc}"'])
+            if (c := chipsym.get(name)) and name in up:
+                L.append(f"	default {c}")
             L += _condef(prefix, spec, knobs)
             L.append(f'	default {"y" if v.value else "n"}')
             for dep in spec.get("depends", []) or []:
@@ -168,8 +178,13 @@ def _knob_entries(inst: Instance, pkg, prefix: str) -> list[str]:
                 L.append(f"	  Costs about {v.area_um2:.0f} um2 at this setting.")
         elif spec.get("type") == "choice":
             # default 不能省：省了当前选的是哪一档就没导出去，往返一圈值必丢
-            L += ['choice', f'	prompt "{desc}"',
-                  f'	default {_sym(prefix, name, v.value)}']
+            L += ['choice', f'	prompt "{desc}"']
+            # 档位型的芯片级旋钮逐档跟随：kconfig 取第一条成立的 default
+            if name in up and name in chipsym:
+                L += [f'	default {_sym(prefix, name, val)} '
+                      f'if {_sym("CHIP", name, val)}'
+                      for val in spec["values"]]
+            L.append(f'	default {_sym(prefix, name, v.value)}')
             per = dict(x.split("	", 1) for x in _gates(pkg, prefix, name, knobs)[1])
             for val in spec["values"]:
                 L.append(f'	config {_sym(prefix, name, val)}')
@@ -178,7 +193,11 @@ def _knob_entries(inst: Instance, pkg, prefix: str) -> list[str]:
                     L.append("	" + per[val])
             L.append("endchoice")
         else:
-            L += [f'config {sym}', f'	int "{desc}"']
+            L += [f'config {sym}'] + (
+                ["	int"] if up.get(name, {}).get("lock")
+                else [f'	int "{desc}"'])
+            if (c := chipsym.get(name)) and name in up:
+                L.append(f"	default {c}")
             L += _condef(prefix, spec, knobs)
             L.append(f'	default {v.value}')
             # 条件区间要排在无条件区间前面：kconfig 取第一条成立的
@@ -190,10 +209,49 @@ def _knob_entries(inst: Instance, pkg, prefix: str) -> list[str]:
     return L
 
 
+def _chip(res: Resolved, pkgs) -> tuple[list[str], dict[str, str]]:
+    """芯片级的旋钮在顶上各占一个符号，后代 `default` 到它身上。"""
+    seen: dict[str, dict] = {}
+    for _, _, pkg, _ in walk(res, pkgs):
+        for k, spec in pkg.inherits().items():
+            seen.setdefault(k, spec)
+    # 顶层 chip: 定过的，菜单里的默认就该是它——否则菜单说的与解出来的不是一件事
+    top = pkgs.get(res.top)
+    fixed = top.chip() if top is not None and hasattr(top, "chip") else {}
+    for k, v in fixed.items():
+        if k in seen:
+            seen[k] = {**seen[k], "default": v}
+    if not seen:
+        return [], {}
+    L = ['menu "芯片级 —— 一颗芯片只有一个说法"']
+    sym = {}
+    for k, spec in sorted(seen.items()):
+        sy = _sym("CHIP", k)
+        sym[k] = sy
+        desc = spec.get("desc") or k
+        if spec.get("type") == "choice":
+            L += ["choice", f'	prompt "{desc}"',
+                  f'	default {_sym("CHIP", k, spec["default"])}']
+            for v in spec["values"]:
+                L += [f'	config {_sym("CHIP", k, v)}', f'		bool "{v}"']
+            L.append("endchoice")
+        elif spec.get("type") == "bool" or isinstance(spec.get("default"), bool):
+            L += [f"config {sy}", f'	bool "{desc}"',
+                  f'	default {"y" if spec.get("default") else "n"}']
+        else:
+            L += [f"config {sy}", f'	int "{desc}"',
+                  f'	default {spec.get("default", 0)}']
+        L.append("")
+    L += ["endmenu", ""]
+    return L, sym
+
+
 def to_kconfig(res: Resolved, pkgs) -> str:
     """装配的每一层是一个 menu，子包的旋钮自动嵌进去，深度不限。"""
     L = ["# 由 xirang 生成。菜单层次与装配层次一一对应。",
          f'mainmenu "{res.top}"', ""]
+    chip, CHIPSYM = _chip(res, pkgs)
+    L += chip
 
     def rec(insts, depth, prefix):
         for i in insts:
@@ -201,7 +259,8 @@ def to_kconfig(res: Resolved, pkgs) -> str:
             title = (p.ip.get("identity") or {}).get("display_name", i.of)
             addr = f"  @ {i.addr:#010x}" if i.addr is not None else ""
             L.append(f'menu "{i.name} — {title}{addr}"')
-            L.extend(_knob_entries(i, p, _sym(prefix, i.name)))
+            L.extend(_knob_entries(i, p, _sym(prefix, i.name),
+                                   CHIPSYM))
             if i.children:
                 rec(i.children, depth + 1, _sym(prefix, i.name))
             L.append("endmenu")

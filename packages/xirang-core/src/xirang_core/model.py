@@ -3,7 +3,8 @@ import dataclasses
 from typing import Any
 
 # 层叠六层，低到高。约束求解不是一层，它横切所有层（见 Value.forced）。
-LAYERS = ["bsv-default", "pdk", "ip-default", "workspace", "instance", "cli"]
+LAYERS = ["bsv-default", "inherit", "pdk", "ip-default", "workspace",
+          "instance", "cli"]
 
 
 @dataclasses.dataclass

@@ -87,7 +87,7 @@ TOP_KEYS = {*DIR_KEYS,
             "name", "version", "spec", "kind", "lang", "identity", "contract",
             "params", "features", "constraints", "area", "emit", "deps",
             "bus", "instances", "connect", "pipe", "test", "diagnostics",
-            "targets", "tasks", "guards", "profiles", "__path__"}
+            "targets", "tasks", "guards", "profiles", "chip", "__path__"}
 
 
 def slow_ctrl(emit: dict, vals) -> bool:
@@ -256,17 +256,20 @@ class Pkg:
         if self.kind not in ("ip", "library"):
             raise Bad(f"{self.path}: kind={self.kind} 只能是 ip 或 library")
         if self.is_library:
-            # 库包不进地址图，所以这些字段没有意义，写了反而误导
-            for k in ("contract", "params", "features", "instances"):
+            # 库包不进地址图，也不是装配，所以这两样没有意义。
+            # 旋钮反倒是库包比 IP 更多的东西——Apb4 从头到尾按 aw/dw 写，
+            # 禁掉旋钮等于让总线库只能在一种位宽下被测。
+            for k in ("contract", "instances"):
                 if k in ip:
-                    raise Bad(f"{self.path}: 库包不该有 {k}——它不进地址图")
+                    raise Bad(f"{self.path}: 库包不该有 {k}——"
+                              f"它不进地址图，也不是装配")
             if self.regmap:
                 raise Bad(f"{self.path}: 库包不该有 regmap.yaml")
             # 但库里的模块确实会被例化（总线绑定器每个总线端口一个），
             # 那笔面积就该记在实现它的包上。库没有旋钮，所以只能是定值。
             a = ip.get("area") or {}
             if a and set(a.get("base") or {}) - {"fixed"}:
-                raise Bad(f"{self.path}: 库包的 area 只能是定值——它没有旋钮可依")
+                raise Bad(f"{self.path}: 库包的 area 只能是定值——本版还没有按库包旋钮量的价目表")
             if set(a) - {"base", "model", "error", "corner", "assembly",
                          "probe"}:
                 raise Bad(f"{self.path}: 库包的 area 有不认识的键")
@@ -606,6 +609,28 @@ class Pkg:
                               f"（域是 {dom or [lo, hi]}）")
             out.append(g)
         return out
+
+    def inherits(self) -> dict[str, dict]:
+        """会沿实例树向下扩散的旋钮。键是旋钮名，值是它自己的声明。"""
+        out = {}
+        for k, spec in self.knobs().items():
+            sc = spec.get("scope", "local")
+            if sc not in ("local", "chip"):
+                raise Bad(f"{self.path}: {k} 的 scope={sc} 只能是 local 或 chip")
+            if spec.get("lock") and sc != "chip":
+                raise Bad(f"{self.path}: {k} 写了 lock 却不是 chip 作用域——"
+                          f"本地旋钮没有可锁的对象")
+            if sc == "chip":
+                out[k] = spec
+        return out
+
+    def chip(self) -> dict:
+        """顶层给芯片级旋钮定的初值。只有装配能写——半路冒出来的全局变量
+        正是 BitBake 那个「这个值谁定的答不出来」的坑。"""
+        c = self.ip.get("chip") or {}
+        if c and not self.is_assembly:
+            raise Bad(f"{self.path}: 只有装配能写 chip——芯片级的事实由顶层定")
+        return dict(c)
 
     def settled(self, ov: dict | None = None) -> dict:
         """默认值加上这一组覆盖，条件默认值也算进去。

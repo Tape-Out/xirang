@@ -123,7 +123,7 @@ def _apply_constraints(pkg: Pkg, knobs, vals):
 
 def resolve_pkg(pkg: Pkg, overrides: dict, override_origin: str,
                 pdk: dict | None = None, cli: dict | None = None,
-                ws=None) -> dict[str, Value]:
+                ws=None, inherit: dict | None = None) -> dict[str, Value]:
     """ws 只按鸭子类型收：要 knobs(包名) 与 origin(键)。core 不认识工作区那个包，
     认识了层次就倒过来了。"""
     knobs = pkg.knobs()
@@ -132,6 +132,11 @@ def resolve_pkg(pkg: Pkg, overrides: dict, override_origin: str,
     c.offer("bsv-default", {k: v.get("default") for k, v in knobs.items()
                             if v.get("default") is not None},
             lambda k: f"{pkg.path} (default)")
+    # 1.5 inherit：祖先扩散下来的芯片级取值。输给后代自己写的，赢过包默认
+    mine = pkg.inherits()
+    if inherit:
+        c.offer("inherit", {k: v for k, v in inherit.items() if k in mine},
+                lambda k: f"{(inherit or {}).get('__from__', '顶层')} (chip)")
     # 2 pdk：工艺事实。只覆盖同名旋钮，通常为空。
     if pdk:
         c.offer("pdk", {k: v for k, v in pdk.items() if k in knobs},
@@ -145,9 +150,20 @@ def resolve_pkg(pkg: Pkg, overrides: dict, override_origin: str,
     c.offer("instance", overrides, lambda k: override_origin)
     # 6 cli
     if cli:
-        c.offer("cli", {k: v for k, v in cli.items() if k in knobs}, lambda k: "<cli>")
+        c.offer("cli", {k: v for k, v in cli.items()
+                        if k in knobs and not k.startswith("chip.")}, lambda k: "<cli>")
 
     vals = c.settle()
+    # 锁住的芯片级旋钮不许就近覆盖，而且要说清是谁在锁
+    for k, spec in mine.items():
+        if spec.get("lock") and inherit and k in inherit \
+                and vals[k].winner.layer not in ("bsv-default", "inherit"):
+            raise Bad(f"{k} 是锁住的芯片级旋钮，只能是 {inherit[k]}，"
+                      f"不能在 {vals[k].winner.origin} 单独写成 {vals[k].value}")
+    for k, spec in mine.items():
+        if spec.get("lock") and inherit and k in inherit:
+            vals[k].value = inherit[k]
+            vals[k].forced_by = "chip lock"
     _check_domain(knobs, vals)
     _apply_constraints(pkg, knobs, vals)
     _check_domain(knobs, vals)
@@ -171,11 +187,17 @@ def resolve(top: str, search: list[pathlib.Path],
             ws=None) -> Resolved:
     root = _find_pkg(top, search)
     bus = root.ip.get("bus", "apb4")
+    seed = root.chip()
+    for k, v in (cli or {}).items():
+        if k.startswith("chip."):
+            seed[k[5:]] = v
+    seed["__from__"] = f"{root.name} 的 chip"
     if not root.is_assembly:
         # 叶子当成「只有一个实例的装配」。不这么做，面板与四个导出对单个 IP
         # 全都打不开——而第三方要的正是单个 IP，不是整颗 SoC。
         # 叶子不进地址图（addr 留空）：它还没有被放到任何一张地址空间里。
-        vals = resolve_pkg(root, {}, f"{root.path} (default)", pdk, cli, ws)
+        vals = resolve_pkg(root, {}, f"{root.path} (default)", pdk, cli, ws,
+                            inherit=seed)
         return Resolved(top=top, bus=bus,
                         instances=[Instance(name=top, of=top, values=vals, bus=bus)])
 
@@ -194,9 +216,11 @@ def resolve(top: str, search: list[pathlib.Path],
                 own[k] = (v, org) if not _tagged(v) else v
         return own, desc
 
-    def build(pkg: Pkg, depth: int, inherited: dict | None = None) -> list[Instance]:
+    def build(pkg: Pkg, depth: int, inherited: dict | None = None,
+              flow: dict | None = None) -> list[Instance]:
         out = []
         inherited = inherited or {}
+        flow = flow if flow is not None else seed
         for spec in pkg.ip.get("instances", []) or []:
             sub = _find_pkg(spec["of"], search)
             if sub.is_library:
@@ -209,7 +233,7 @@ def resolve(top: str, search: list[pathlib.Path],
             for k, v in anc_desc.items():
                 desc.setdefault(k, {}).update(v)
             own.update(anc_own)
-            vals = resolve_pkg(sub, own, origin, pdk, cli, ws)
+            vals = resolve_pkg(sub, own, origin, pdk, cli, ws, inherit=flow)
             # 没有控制口的实例（核）不进地址图。它的 regmap 描述的是自己的
             # CSR 空间，跟片上地址空间没有关系——照搬那个 base 会让两个核
             # 「重叠」在 0 地址上。
@@ -230,7 +254,12 @@ def resolve(top: str, search: list[pathlib.Path],
                             size=int(str(size), 0) if size is not None else None,
                             bus=spec.get("bus", bus))
             if sub.is_assembly:
-                inst.children = build(sub, depth + 1, desc)
+                # 这一层解出来的芯片级取值接着往下扩散，就近生效
+                down = dict(flow)
+                down.update({k: vals[k].value for k in sub.inherits()
+                             if k in vals})
+                down["__from__"] = spec["name"]
+                inst.children = build(sub, depth + 1, desc, down)
             elif desc:
                 raise Bad(f"{spec['name']} 不是装配，配不了后代：{sorted(desc)}")
             out.append(inst)

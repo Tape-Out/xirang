@@ -10,3 +10,4 @@ test/
 *.fst
 __pycache__/
 dist/
+*.egg-info/

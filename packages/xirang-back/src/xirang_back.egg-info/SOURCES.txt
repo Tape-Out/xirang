@@ -1,8 +1,0 @@
-pyproject.toml
-src/xirang_back/__init__.py
-src/xirang_back/ecc.py
-src/xirang_back/sim.py
-src/xirang_back.egg-info/PKG-INFO
-src/xirang_back.egg-info/SOURCES.txt
-src/xirang_back.egg-info/dependency_links.txt
-src/xirang_back.egg-info/top_level.txt

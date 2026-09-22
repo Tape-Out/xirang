@@ -1,3 +1,0 @@
-[console_scripts]
-ran = xirang.cli:main
-xirang = xirang.cli:main

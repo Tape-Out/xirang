@@ -1,4 +1,0 @@
-xirang-core
-xirang-gen
-xirang-area
-xirang-back

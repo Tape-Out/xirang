@@ -1,4 +1,0 @@
-xirang-core
-xirang-gen
-pyyaml
-kconfiglib

@@ -72,7 +72,7 @@ DRIVERS = {"regs", "flat", "bsv", "assembly", "library", "foreign", "none"}
 
 # 黑盒声明认的键。黑盒不解析源码，这份声明就是它的全部形状。
 FOREIGN_KEYS = {"kind", "lang", "top", "rtl", "sim", "params", "defines",
-                "includes", "clock", "reset", "ports", "limits"}
+                "includes", "setup", "clock", "reset", "ports", "limits"}
 PORT_KEYS = {"endpoint", "kind", "role", "profile", "prefix", "type", "map"}
 EP_KINDS = {"transaction", "stream", "event", "physical"}
 
@@ -421,7 +421,17 @@ class Pkg:
                                           f"when 用了不存在的旋钮 {w}")
                         f = f["path"]
                     if not (self.root / f).is_file():
-                        raise Bad(f"{self.path}: foreign 的 {k} 列了树上没有的 {f}")
+                        # 生成器类的上游：RTL 要先跑一遍对方的脚本才存在。
+                        # 报「树上没有」等于把人晾在那里，要说清先跑什么
+                        hint = ""
+                        if setup := e.get("setup"):
+                            hint = (f"——它是生成物，先跑 "
+                                    f"`ran run {self.name} {setup}`")
+                        raise Bad(f"{self.path}: foreign 的 {k} 列了树上没有的 {f}{hint}")
+            if setup := e.get("setup"):
+                if setup not in (self.ip.get("tasks") or {}):
+                    raise Bad(f"{self.path}: foreign 的 setup 指向 {setup}，"
+                              f"但 tasks 里没有这条")
             knobs = self.knobs()
             for pn, v in (e.get("params") or {}).items():
                 if isinstance(v, str) and v not in knobs:

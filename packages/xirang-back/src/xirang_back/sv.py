@@ -32,7 +32,10 @@ def _width(t) -> int:
 
 
 def elaborate(files, top: str, params: dict):
-    """展开一次，返回 (端口表, 参数表, 出错的诊断)。没装 pyslang 就返回 None。"""
+    """展开一次，返回 (端口表, 参数表, 出错的诊断)。没装 pyslang 就返回 None。
+
+    参数表是 {名字: (取值, 位宽)}。位宽要跟着出来——按取值猜类型会出错。
+    """
     if not available():
         return None
     from pyslang import Bag, ast, syntax
@@ -56,10 +59,14 @@ def elaborate(files, top: str, params: dict):
     for m in body:
         if isinstance(m, ast.ParameterSymbol):
             try:
-                got[m.name] = int(str(m.value).split("'")[-1].lstrip("bdhox") or 0, 0) \
-                    if "'" in str(m.value) else int(str(m.value))
+                txt = str(m.value)
+                v = (int(txt.split("'")[-1].lstrip("bdhox") or 0, 0)
+                     if "'" in txt else int(txt))
             except ValueError:
-                got[m.name] = str(m.value)
+                v = str(m.value)
+            # 位宽比取值可靠：`parameter RESET_PC = 32'd0` 的值是 0，但它是
+            # 32 位地址不是开关。按取值猜类型会把它判成布尔
+            got[m.name] = (v, _width(m.type))
     errs = [str(d) for d in c.getAllDiagnostics()
             if "error" in str(getattr(d, "severity", "")).lower()]
     return ports, got, errs

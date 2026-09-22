@@ -68,7 +68,9 @@ def receipt(pkg: Pkg, vals) -> list[tuple[str, str]]:
     for pt in e.get("ports") or []:
         named += list((pt.get("map") or {}).values())
         if pre := pt.get("prefix"):
-            if not any(n.startswith(pre) for n in ports):
+            # 与归组同一条规则：先剥掉 i_／o_／io_ 这类方向前缀再比。
+            # SERV 的一组总线叫 i_dbus_ack 与 o_dbus_adr，共有的是 dbus_ 而不是 i_
+            if not any(_stem(n).startswith(pre) or n.startswith(pre) for n in ports):
                 out.append(("XR-FGN-001",
                             f"端点 {pt['endpoint']} 说端口都以 {pre} 打头，"
                             f"展开之后一个都没有"))
@@ -81,9 +83,9 @@ def receipt(pkg: Pkg, vals) -> list[tuple[str, str]]:
     for k, v in want.items():
         if k not in pars:
             out.append(("XR-FGN-002", f"{e['top']} 没有参数 {k}"))
-        elif pars[k] != v:
+        elif pars[k][0] != v:
             out.append(("XR-FGN-002",
-                        f"参数 {k} 要的是 {v}，展开之后是 {pars[k]}"))
+                        f"参数 {k} 要的是 {v}，展开之后是 {pars[k][0]}"))
     return out
 
 
@@ -109,6 +111,21 @@ def _camel(name: str) -> str:
     return a.lower() + "".join(w[:1].upper() + w[1:].lower() for w in rest)
 
 
+DIRS = ("i_", "o_", "io_")
+
+
+def _stem(n: str) -> str:
+    """剥掉方向前缀再归组。
+
+    SERV 的线叫 `o_dbus_adr` 与 `i_dbus_ack`，按 `o_`／`i_` 归组会把不相干的
+    凑成一堆——真正成组的是 `dbus`。
+    """
+    for d in DIRS:
+        if n.startswith(d):
+            return n[len(d):]
+    return n
+
+
 def _groups(ports: dict, skip: set) -> tuple[dict[str, list[str]], list[str]]:
     """按公共前缀把端口归组。整组协议写 prefix，零散的线逐根 map。
 
@@ -118,7 +135,7 @@ def _groups(ports: dict, skip: set) -> tuple[dict[str, list[str]], list[str]]:
     names = [n for n in ports if n not in skip]
     best: dict[str, list[str]] = {}
     for n in names:
-        parts = n.split("_")
+        parts = _stem(n).split("_")
         for k in range(len(parts) - 1, 0, -1):
             pre = "_".join(parts[:k]) + "_"
             best.setdefault(pre, []).append(n)
@@ -130,6 +147,24 @@ def _groups(ports: dict, skip: set) -> tuple[dict[str, list[str]], list[str]]:
             groups[pre] = sorted(rest)
             taken |= set(rest)
     return groups, sorted(n for n in names if n not in taken)
+
+
+def _string_params(files, top: str) -> dict[str, str]:
+    """源码里默认值是字符串字面量的参数。
+
+    Verilog 没有字符串类型，`parameter RESET_STRATEGY = "MINI"` 打包成 32 位整数，
+    展开之后看到的是 1296649801。把它当整数投影回去，模块里的字符串比较就永远不等。
+    """
+    out: dict[str, str] = {}
+    for f in files:
+        txt = pathlib.Path(f).read_text(encoding="utf-8", errors="ignore")
+        i = txt.find(f"module {top}")
+        if i < 0:
+            continue
+        head = txt[i:txt.find(") (", i) if ") (" in txt[i:i + 8000] else i + 8000]
+        for m in re.finditer(r"parameter[^=;]*?(\w+)\s*=\s*\"([^\"]*)\"", head):
+            out[m.group(1)] = m.group(2)
+    return out
 
 
 def draft(files, top: str, clock: str = "clk", reset: str = "rst_n") -> str:
@@ -152,15 +187,21 @@ def draft(files, top: str, clock: str = "clk", reset: str = "rst_n") -> str:
     feats = ["features:"]
     proj = []
     skipped = []
-    for k, v in sorted(pars.items()):
+    strs = _string_params(files, top)
+    for k, (v, w) in sorted(pars.items()):
         kn = _camel(k)
+        if k in strs:
+            # Verilog 把字符串默认值打包成整数（"MINI" -> 0x4D494E49），slang 看到的
+            # 也是整数。只有源码的声明文本看得出它本来是字符串
+            skipped.append(f'{k} = "{strs[k]}"  （字符串，写成 choice 并列出取值域）')
+            continue
         if not isinstance(v, int):
             # 数组、结构、枚举：不是标量，做不成旋钮。留在默认值上，并说出来——
             # 「没做」写出来，比让人以为「已经全支持了」诚实
             skipped.append(f"{k} = {str(v)[:40]}")
             continue
         proj.append(f"    {k}: {kn}")
-        if v in (0, 1):
+        if w == 1:
             feats += [f"  {kn}:", "    type: bool", f"    default: {str(bool(v)).lower()}"]
         else:
             L += [f"  {kn}:", "    type: int", f"    default: {v}"]

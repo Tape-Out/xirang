@@ -27,19 +27,36 @@ def _short(name: str) -> str:
     return name[:32] + "_" + hashlib.sha1(name.encode()).hexdigest()[:8]
 
 
-def run(files, dut: str, params: dict, work: pathlib.Path,
-        name: str) -> tuple[bool, str]:
-    """编译并跑一次。返回 (过没过, 输出)。"""
+def run(files, dut: str, params: dict, work: pathlib.Path, name: str,
+        cwd: pathlib.Path | None = None, plusargs=(), expect: str = "",
+        secs: int = 300) -> tuple[bool, str]:
+    """编译并跑一次。返回 (过没过, 输出)。
+
+    **在包根下跑**：上游测试台里的 `$readmemh("sw/x.hex")` 是相对进程当前目录的。
+    在别处跑，内存读不进来全是 X，核永远转不完——表现成仿真挂住，而挂住这件事
+    看不出是路径问题。
+
+    **`expect` 才是判据**：`+timeout` 逼停之后仿真也会「正常结束」，光看退出码
+    等于把「没量」说成「过了」。要看它真的打出了该打的东西。
+    """
     work.mkdir(parents=True, exist_ok=True)
     vvp_file = work / f"{_short(name)}.vvp"
     cmd = [need("iverilog"), "-o", str(vvp_file)]
     cmd += [f"-P{dut}.{k}={v}" for k, v in sorted(params.items())]
     cmd += [str(f) for f in files]
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    here = str(cwd) if cwd else None
+    r = subprocess.run(cmd, capture_output=True, text=True, cwd=here)
     if r.returncode != 0:
         return False, (r.stderr or r.stdout)
-    r = subprocess.run([need("vvp"), "-N", str(vvp_file)],
-                       capture_output=True, text=True, timeout=600)
+    try:
+        r = subprocess.run([need("vvp"), "-N", str(vvp_file), *plusargs],
+                           capture_output=True, text=True, timeout=secs, cwd=here)
+    except subprocess.TimeoutExpired:
+        return False, f"仿真跑了 {secs} 秒还没结束"
     out = (r.stdout or "") + (r.stderr or "")
-    # 与 bluesim 同一条判据：$finish 不设退出码，所以还要看输出里有没有失败字样
-    return r.returncode == 0 and not BAD.search(out), out
+    if r.returncode != 0 or BAD.search(out):
+        return False, out
+    if expect and expect not in out:
+        return False, ("输出里没有「" + expect + "」——仿真结束了，但它没做该做的事"
+                       + chr(10) + out[-400:])
+    return True, out

@@ -201,7 +201,10 @@ def run(pkg: Pkg, index: dict[str, Pkg], *, out: pathlib.Path,
                 else:
                     want = foreign.bake(pkg, vals)
                 ok, o = iv.run([pkg.root / f for f in u["files"]], u["dut"],
-                               want, work / "up", f"{u['name']}{lbl}")
+                               want, work / "up", f"{u['name']}{lbl}",
+                               cwd=pkg.root, plusargs=u.get("plusargs") or (),
+                               expect=u.get("expect", ""),
+                               secs=int(u.get("timeout", 300)))
                 if not ok:
                     bad = True
                     notes.append(f"上游 {u['name']}：" + tail(o))

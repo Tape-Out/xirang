@@ -90,9 +90,17 @@ def receipt(pkg: Pkg, vals) -> list[tuple[str, str]]:
     for k, v in want.items():
         if k not in pars:
             out.append(("XR-FGN-002", f"{e['top']} 没有参数 {k}"))
-        elif pars[k][0] != v:
+        elif (got := pars[k]).enum:
+            # 枚举按档位名比。名字对不上就是没生效，而 <unset> 正是没生效的样子
+            cur = next((a for a, b in got.enum if b == got.value), str(got.value))
+            if str(v) != cur:
+                names = [a for a, _ in got.enum]
+                out.append(("XR-FGN-002",
+                            f"参数 {k} 要的是 {v}，展开之后是 {cur}"
+                            + (f"（档位只有 {names}）" if str(v) not in names else "")))
+        elif got.value != v:
             out.append(("XR-FGN-002",
-                        f"参数 {k} 要的是 {v}，展开之后是 {pars[k][0]}"))
+                        f"参数 {k} 要的是 {v}，展开之后是 {got.value}"))
     return out
 
 
@@ -195,7 +203,8 @@ def draft(files, top: str, clock: str = "clk", reset: str = "rst_n") -> str:
     proj = []
     skipped = []
     strs = _string_params(files, top)
-    for k, (v, w) in sorted(pars.items()):
+    for k, p in sorted(pars.items()):
+        v, w = p.value, p.width
         kn = _camel(k)
         if k in strs:
             # Verilog 把字符串默认值打包成整数（"MINI" -> 0x4D494E49），slang 看到的
@@ -208,7 +217,14 @@ def draft(files, top: str, clock: str = "clk", reset: str = "rst_n") -> str:
             skipped.append(f"{k} = {str(v)[:40]}")
             continue
         proj.append(f"    {k}: {kn}")
-        if w == 1:
+        if p.enum:
+            # 枚举参数只能用档位名覆盖。传整数 slang 会把它置成 <unset>，
+            # 而 <unset> 不报错——配置静默没生效，后端量的是默认那一档
+            cur = next((a for a, b in p.enum if b == v), p.enum[0][0])
+            L += [f"  {kn}:", "    type: choice", "    values:"]
+            L += [f"    - {a}" for a, _ in p.enum]
+            L.append(f"    default: {cur}")
+        elif w == 1:
             feats += [f"  {kn}:", "    type: bool", f"    default: {str(bool(v)).lower()}"]
         else:
             L += [f"  {kn}:", "    type: int", f"    default: {v}"]

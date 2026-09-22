@@ -16,12 +16,39 @@ class Port:
     width: int          # 位数；解不出来就是 0
 
 
+@dataclasses.dataclass(frozen=True)
+class Param:
+    """一个参数：取值、位宽、如果是枚举还有它的档位名。
+
+    三样都要：位宽决定它是开关还是取值，枚举决定能不能用整数覆盖——
+    `RV32M=2` 传给一个枚举类型的参数，slang 只会把它置成 <unset>，而那不报错。
+    """
+    name: str
+    value: object
+    width: int
+    enum: tuple[tuple[str, int], ...] = ()
+
+
 def available() -> bool:
     try:
         import pyslang  # noqa: F401
     except ImportError:
         return False
     return True
+
+
+def _num(v):
+    """slang 的常量转成数。转不成就原样留着字符串。
+
+    它给的是 ConstantValue，`int()` 直接用会抛——枚举成员的值就是这么被我
+    悄悄吞掉的，结果整条枚举通路看着像没实现。
+    """
+    txt = str(v)
+    try:
+        return (int(txt.split("'")[-1].lstrip("bdhox") or 0, 0)
+                if "'" in txt else int(txt))
+    except ValueError:
+        return txt
 
 
 def _width(t) -> int:
@@ -34,7 +61,8 @@ def _width(t) -> int:
 def elaborate(files, top: str, params: dict, defines=()):
     """展开一次，返回 (端口表, 参数表, 出错的诊断)。没装 pyslang 就返回 None。
 
-    参数表是 {名字: (取值, 位宽)}。位宽要跟着出来——按取值猜类型会出错。
+    参数表是 {名字: Param}。位宽与枚举档位都要跟着出来——按取值猜类型会出错，
+    而枚举参数用整数去覆盖不会报错，只会悄悄没生效。
     """
     if not available():
         return None
@@ -71,15 +99,15 @@ def elaborate(files, top: str, params: dict, defines=()):
             # yosys 的 chparam 会当场报「没有这个参数」，而报错指的是我们的清单
             if getattr(m, "isLocalParam", False):
                 continue
-            try:
-                txt = str(m.value)
-                v = (int(txt.split("'")[-1].lstrip("bdhox") or 0, 0)
-                     if "'" in txt else int(txt))
-            except ValueError:
-                v = str(m.value)
-            # 位宽比取值可靠：`parameter RESET_PC = 32'd0` 的值是 0，但它是
-            # 32 位地址不是开关。按取值猜类型会把它判成布尔
-            got[m.name] = (v, _width(m.type))
+            v = _num(m.value)
+            t = m.type
+            mem: tuple[tuple[str, int], ...] = ()
+            if getattr(t, "isEnum", False):
+                try:
+                    mem = tuple((x.name, _num(x.value)) for x in t.canonicalType)
+                except TypeError:
+                    mem = ()
+            got[m.name] = Param(m.name, v, _width(t), mem)
     errs = [str(d) for d in c.getAllDiagnostics()
             if "error" in str(getattr(d, "severity", "")).lower()]
     return ports, got, errs

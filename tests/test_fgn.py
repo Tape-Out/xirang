@@ -13,6 +13,7 @@
 """
 import sys
 
+from xirang_back.sv import Param, _num
 from xirang_gen.foreign import _groups, _stem
 
 
@@ -44,10 +45,28 @@ def main() -> int:
     if len(l2) != 3:
         bad.append(f"三根都该算零散：{l2}")
 
+    # 枚举参数只能用档位名覆盖。传整数 slang 会把它置成 <unset>，而 <unset> 不报错——
+    # 配置静默没生效，后端量的是默认那一档
+    p = Param("RV32M", 2, 32,
+              (("RV32MNone", 0), ("RV32MSlow", 1), ("RV32MFast", 2)))
+    cur = next((a for a, b in p.enum if b == p.value), None)
+    if cur != "RV32MFast":
+        bad.append(f"枚举当前档位认错了：{cur}")
+    if not p.enum or p.width != 32:
+        bad.append("Param 少了枚举或位宽")
+
+    # slang 给的是 ConstantValue，int() 直接用会抛。吞掉这个异常，整条枚举通路
+    # 看着像没实现——枚举列表会静默变成空
+    for src, want in (("2", 2), ("32'd65536", 65536), ("1'b1", 1), ("32'h10", 16)):
+        if _num(src) != want:
+            bad.append(f"{src} 解成了 {_num(src)}，应是 {want}")
+    if _num("MINI") != "MINI":
+        bad.append("解不成数的应原样留着")
+
     for line in bad:
         print(f"✘ {line}")
     if not bad:
-        print("✔ 方向前缀剥得掉，归组按词根，两根不成组")
+        print("✔ 方向前缀剥得掉，归组按词根，两根不成组；枚举档位与常量解析都对")
     return 1 if bad else 0
 
 

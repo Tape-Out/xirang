@@ -105,6 +105,12 @@ def holes(pkg: Pkg, vals, out) -> dict[str, str]:
     d = {"name": pkg.name, "root": str(pkg.root), "out": str(out)}
     for k, v in (vals or {}).items():
         d[f"knob.{k}"] = str(getattr(v, "value", v))
+    # 生成器类的上游要的是它自己那套 `-D` 串：Vortex 的 gen_config.py 收
+    # `--cflags "-DVX_CFG_NUM_CORES=4 …"`，我们的旋钮投影出来正好是这个形状。
+    # 这样「配置从哪来」仍然只有一个源头——清单，而不是两处各写一遍
+    from xirang_gen import foreign
+    if pkg.foreign_emit() is not None:
+        d["defines"] = " ".join(f"-D{x}" for x in foreign.defines(pkg, vals))
     return d
 
 

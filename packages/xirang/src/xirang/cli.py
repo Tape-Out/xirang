@@ -363,7 +363,7 @@ def cmd_wrap(args) -> int:
         got = verilog.elaborate(foreign.files(pkg, knobs=foreign.knobs_of(vals)),
                                 fe["top"],
                                 foreign.numeric(pkg, vals),
-                                out / f"{fe['top']}.v", foreign.defines(pkg),
+                                out / f"{fe['top']}.v", foreign.defines(pkg, vals),
                                 foreign.includes(pkg), pkg.root)
         print(f"{got}")
         baked = ", ".join(f"{k}={v}" for k, v in sorted(foreign.bake(pkg, vals).items()))

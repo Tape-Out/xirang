@@ -426,6 +426,17 @@ class Pkg:
             for pn, v in (e.get("params") or {}).items():
                 if isinstance(v, str) and v not in knobs:
                     raise Bad(f"{self.path}: foreign 的参数 {pn} 投影到了不存在的旋钮 {v}")
+            d = e.get("defines")
+            if isinstance(d, dict):
+                for macro, src in d.items():
+                    if isinstance(src, dict):
+                        if set(src) - {"when"} or "when" not in src:
+                            raise Bad(f"{self.path}: 宏 {macro} 的表里只认 when")
+                        src = src["when"]
+                    if isinstance(src, str) and src not in knobs:
+                        raise Bad(f"{self.path}: 宏 {macro} 投影到了不存在的旋钮 {src}")
+            elif d is not None and not isinstance(d, list):
+                raise Bad(f"{self.path}: foreign 的 defines 要写成列表或「宏: 旋钮」的表")
             for k in ("clock", "reset"):
                 c = e.get(k)
                 if c is not None and "port" not in c:

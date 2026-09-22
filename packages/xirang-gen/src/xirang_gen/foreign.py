@@ -31,10 +31,43 @@ def bake(pkg: Pkg, vals) -> dict[str, int]:
     return out
 
 
-def defines(pkg: Pkg) -> list[str]:
-    """这份黑盒要带哪些宏。"""
-    e = pkg.foreign_emit()
-    return list((e or {}).get("defines") or [])
+def defines(pkg: Pkg, vals=None) -> list[str]:
+    """这份黑盒要带哪些宏。
+
+    两种写法。列表是固定的宏（`RISCV_FORMAL`）。表是**投影**：宏的值取自旋钮，
+    Vortex 整份配置就是这样给的（`-DVX_CFG_NUM_CORES=4`），没有一个 Verilog
+    参数。布尔旋钮写成 `{when: 旋钮}`，开了才定义这个宏、且不带值——
+    `ifdef` 判的是「定义没定义」，给它 `=0` 反而是打开。
+    """
+    e = pkg.foreign_emit() or {}
+    got = e.get("defines") or []
+    if isinstance(got, list):
+        return [str(x) for x in got]
+    out = []
+    for macro, src in got.items():
+        if isinstance(src, dict):
+            k = src.get("when")
+            if k is None:
+                raise Bad(f"{pkg.name}: 宏 {macro} 的表里只认 when")
+            v = _knob(pkg, vals, k, macro)
+            if v:
+                out.append(str(macro))
+            continue
+        v = src if not isinstance(src, str) else _knob(pkg, vals, src, macro)
+        out.append(f"{macro}={int(v) if isinstance(v, bool) else v}")
+    return out
+
+
+def _knob(pkg: Pkg, vals, name: str, macro: str):
+    if name not in pkg.knobs():
+        raise Bad(f"{pkg.name}: 宏 {macro} 投影到了不存在的旋钮 {name}")
+    if vals is None or name not in vals:
+        # 没解出配置时（起草、lint）用默认值，不假装有值
+        d = pkg.knobs()[name].get("default")
+        if d is None:
+            raise Bad(f"{pkg.name}: 宏 {macro} 要的旋钮 {name} 没有默认值")
+        return d
+    return getattr(vals[name], "value", vals[name])
 
 
 def includes(pkg: Pkg) -> list[pathlib.Path]:
@@ -113,7 +146,7 @@ def receipt(pkg: Pkg, vals) -> list[tuple[str, str]]:
                                f"（pip install xirang[sv]）")]
     want = bake(pkg, vals)
     got = sv.elaborate(files(pkg, knobs=knobs_of(vals)), e["top"], want,
-                       defines(pkg), includes(pkg))
+                       defines(pkg, vals), includes(pkg))
     ports, pars, errs = got
     out: list[tuple[str, str]] = []
     if errs:
@@ -312,7 +345,7 @@ def elaborates(pkg: Pkg, vals) -> list[str]:
     if e is None or not sv.available():
         return []
     got = sv.elaborate(files(pkg, knobs=knobs_of(vals)), e["top"], bake(pkg, vals),
-                       defines(pkg), includes(pkg))
+                       defines(pkg, vals), includes(pkg))
     if got is None:
         return []
     _, _, errs = got

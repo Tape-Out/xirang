@@ -85,6 +85,9 @@ def _apply_constraints(pkg: Pkg, knobs, vals):
                     vals[k].forced_by = f"depends on {dep}"
                     changed = True
 
+    if hit := pkg.offends({k: v.value for k, v in vals.items()}):
+        knob, why = hit
+        raise Bad(f"{knob}={vals[knob].value} 被守卫排除了：{why}")
     for c in pkg.ip.get("constraints", []) or []:
         when, then = c.get("when", {}), c.get("then", {})
         if all(vals[k].value == v for k, v in when.items() if k in vals):
@@ -211,7 +214,27 @@ def resolve(top: str, search: list[pathlib.Path],
 
     insts = build(root, 0)
     _check_addr(insts)
+    _check_guards(root, insts, search)
     return Resolved(top=top, bus=bus, instances=insts)
+
+
+def _check_guards(root: Pkg, insts: list[Instance], search):
+    """装配的守卫跨包生效：每一层都拿自己的那条尺，去量它装进来的那些实例。
+
+    子包管得了自己的字段，管不了「这个 CPU 配成 32 位时那个总线桥只能是某几档」——
+    那是装配才知道的事。所以点号键在这里落地，而且递归，装配套装配一样有效。
+    """
+    def rec(pkg: Pkg, here: list[Instance]):
+        if pkg.guards():
+            flat = {f"{i.name}.{k}": v.value
+                    for i in here for k, v in i.values.items()}
+            if hit := pkg.offends(flat):
+                raise Bad(f"{pkg.name}：{hit[0]}={flat[hit[0]]} 被守卫排除了："
+                          f"{hit[1]}")
+        for i in here:
+            if i.children:
+                rec(_find_pkg(i.of, search), i.children)
+    rec(root, insts)
 
 
 def _check_addr(insts: list[Instance]):

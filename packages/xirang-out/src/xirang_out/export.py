@@ -91,6 +91,53 @@ def symtab(res: Resolved, pkgs) -> dict[str, tuple[tuple[str, ...], str, str]]:
     return out
 
 
+def _cond(prefix: str, when: dict, knobs: dict) -> str:
+    """守卫的 when 投影成 Kconfig 的条件表达式。"""
+    bits = []
+    for k, v in when.items():
+        spec = knobs.get(k, {})
+        match spec.get("type"):
+            case "bool":
+                bits.append(f"{'' if v else '!'}{_sym(prefix, k)}")
+            case "choice":
+                bits.append(_sym(prefix, k, v))
+            case _:
+                bits.append(f"{_sym(prefix, k)} = {v}")
+    return " && ".join(bits) if len(bits) == 1 else "(" + ") && (".join(bits) + ")"
+
+
+def _gates(pkg, prefix: str, name: str, knobs: dict) -> tuple[list[str], list[str]]:
+    """这个旋钮被哪些守卫收窄。返回 (条目内的行, choice 里逐档的 depends)。
+
+    Kconfig 原本就有这套语义，我们不另造：条件成立时符号**不可选**
+    （`depends on !(条件)`），同时 `default … if 条件` 把它钉在允许的那个值上——
+    kconfig 里看不见的符号照样取默认值，于是「不可选」与「只能是这个」是一件事。
+    """
+    lines: list[str] = []
+    per_val: list[str] = []
+    spec = knobs.get(name, {})
+    for g in pkg.guards():
+        keep = g["narrow"].get(name)
+        if keep is None:
+            continue
+        c = _cond(prefix, g["when"], knobs)
+        match spec.get("type"):
+            case "choice":
+                per_val += [f"{v}		depends on !({c})"
+                            for v in spec.get("values", []) if v not in keep]
+            case "bool":
+                lines.append(f"	depends on !({c})")
+                lines.append(f"	default {'y' if keep[0] else 'n'} if ({c})")
+            case _:
+                lines.append(f"	range {min(keep)} {max(keep)} if ({c})"
+                             if len(keep) > 1 else f"	depends on !({c})")
+                if len(keep) == 1:
+                    lines.append(f"	default {keep[0]} if ({c})")
+        lines.append(f"	comment \"{g['why']}\"" if False else "")
+        lines.pop()
+    return lines, per_val
+
+
 def _knob_entries(inst: Instance, pkg, prefix: str) -> list[str]:
     L = []
     knobs = pkg.knobs()
@@ -103,6 +150,7 @@ def _knob_entries(inst: Instance, pkg, prefix: str) -> list[str]:
                   f'	default {"y" if v.value else "n"}']
             for dep in spec.get("depends", []) or []:
                 L.append(f"	depends on {_sym(prefix, dep)}")
+            L += _gates(pkg, prefix, name, knobs)[0]
             if v.area_um2:
                 # 一行一条，别在 f-string 里塞换行
                 L.append("	help")
@@ -111,12 +159,17 @@ def _knob_entries(inst: Instance, pkg, prefix: str) -> list[str]:
             # default 不能省：省了当前选的是哪一档就没导出去，往返一圈值必丢
             L += ['choice', f'	prompt "{desc}"',
                   f'	default {_sym(prefix, name, v.value)}']
+            per = dict(x.split("	", 1) for x in _gates(pkg, prefix, name, knobs)[1])
             for val in spec["values"]:
                 L.append(f'	config {_sym(prefix, name, val)}')
                 L.append(f'		bool "{val}"')
+                if val in per:
+                    L.append("	" + per[val])
             L.append("endchoice")
         else:
             L += [f'config {sym}', f'	int "{desc}"', f'	default {v.value}']
+            # 条件区间要排在无条件区间前面：kconfig 取第一条成立的
+            L += _gates(pkg, prefix, name, knobs)[0]
             r = spec.get("range")
             if r:
                 L.append(f"	range {r[0]} {r[1]}")

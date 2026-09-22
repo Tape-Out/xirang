@@ -87,7 +87,7 @@ TOP_KEYS = {*DIR_KEYS,
             "name", "version", "spec", "kind", "lang", "identity", "contract",
             "params", "features", "constraints", "area", "emit", "deps",
             "bus", "instances", "connect", "pipe", "test", "diagnostics",
-            "targets", "tasks", "__path__"}
+            "targets", "tasks", "guards", "__path__"}
 
 
 def slow_ctrl(emit: dict, vals) -> bool:
@@ -122,6 +122,10 @@ def _guess(raw: str):
     if m:
         return "int", int(m.group(2).replace("_", ""), 16 if m.group(1) == "h" else 10)
     return None, None
+
+
+def _isbool(spec: dict) -> bool:
+    return spec.get("type") == "bool" or isinstance(spec.get("default"), bool)
 
 
 class Pkg:
@@ -540,6 +544,76 @@ class Pkg:
                         raise Bad(f"{self.path}: emit.pins 的某一项缺 {miss}")
                 return e
         raise Bad(f"{self.path}: 没有 kind: bsv 的 emit 段")
+
+    def guards(self) -> list[dict]:
+        """字段的条件取值域。
+
+        像表单那样：选了 A，B 的可选项就跟着变。与 `constraints` 的分别是——
+        约束是「不满足就报错」，守卫是「这些取值根本不提供」。矩阵因此不会去跑
+        一个上游本来就不支持的组合，而不是跑了再红。
+
+        每条守卫都要写 `why`：说不出为什么的限制，过两个月没人敢动它。
+        """
+        out = []
+        for i, g in enumerate(self.ip.get("guards") or []):
+            bad = set(g) - {"when", "narrow", "why"}
+            if bad or not g.get("when") or not g.get("narrow"):
+                raise Bad(f"{self.path}: guards[{i}] 要写 when 与 narrow，"
+                          f"只认 when/narrow/why（多了 {sorted(bad)}）")
+            if not g.get("why"):
+                raise Bad(f"{self.path}: guards[{i}] 没写 why——"
+                          f"说不出为什么的限制，过两个月没人敢动它")
+            knobs = self.knobs()
+            insts = {x["name"] for x in (self.ip.get("instances") or [])}
+            for k in list(g["when"]) + list(g["narrow"]):
+                # 点号键伸进子实例：装配管得着它装进来的那些包的旋钮，
+                # 取值域归那个包管，这里只核到实例名为止
+                head, dot, _ = k.partition(".")
+                if dot and head not in insts:
+                    raise Bad(f"{self.path}: guards[{i}] 的 {k} "
+                              f"指向不存在的实例 {head}")
+                if not dot and k not in knobs:
+                    raise Bad(f"{self.path}: guards[{i}] 提到不存在的旋钮 {k}")
+            for k, keep in g["narrow"].items():
+                if "." in k:
+                    if not isinstance(keep, list) or not keep:
+                        raise Bad(f"{self.path}: guards[{i}] 的 narrow.{k} 要是非空列表")
+                    continue
+                if not isinstance(keep, list) or not keep:
+                    raise Bad(f"{self.path}: guards[{i}] 的 narrow.{k} 要是非空列表")
+                spec = knobs[k]
+                dom = spec.get("values") or (
+                    [True, False] if _isbool(spec) else None)
+                lo, hi = (spec.get("range") or [None, None])[:2]
+                extra = [v for v in keep
+                         if (dom is not None and v not in dom)
+                         or (dom is None and not isinstance(v, int))
+                         or (lo is not None and not lo <= v <= hi)]
+                if extra:
+                    raise Bad(f"{self.path}: guards[{i}] 的 narrow.{k} 收窄到了"
+                              f"取值域之外的 {extra}"
+                              f"（域是 {dom or [lo, hi]}）")
+            out.append(g)
+        return out
+
+    def narrowed(self, vals: dict) -> dict[str, list]:
+        """在这组取值下，哪些旋钮的取值域被收窄成了什么。`show` 与解析都读它。"""
+        got: dict[str, list] = {}
+        for g in self.guards():
+            if all(vals.get(k) == v for k, v in g["when"].items()):
+                for k, keep in g["narrow"].items():
+                    got[k] = [v for v in got.get(k, keep) if v in keep]
+        return got
+
+    def offends(self, vals: dict) -> tuple[str, str] | None:
+        """这组取值有没有踩到守卫。踩了就返回 (旋钮, 为什么)。"""
+        for g in self.guards():
+            if not all(vals.get(k) == v for k, v in g["when"].items()):
+                continue
+            for k, keep in g["narrow"].items():
+                if k in vals and vals[k] not in keep:
+                    return k, g["why"]
+        return None
 
     def knobs(self) -> dict[str, dict]:
         """参数与特性合成一张表，层叠与求解都对着它做。"""

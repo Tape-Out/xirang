@@ -208,6 +208,14 @@ def show(pk: Pkg, idx: dict[str, Pkg]) -> str:
             L.append(f"  {_pad(k, 28)} {_pad(spec.get('type', ''), 8)} "
                      f"{_pad(dom, 40)} 默认 {spec.get('default', '—')}")
 
+    if gs := pk.guards():
+        L.append(f"守卫 {len(gs)}")
+        for g in gs:
+            cond = " 且 ".join(f"{k}={v}" for k, v in g["when"].items())
+            for k, keep in g["narrow"].items():
+                L.append(f"  {_pad(cond, 28)} → "
+                         f"{_pad(k + ' 只能是 ' + str(keep), 40)} {g['why']}")
+
     eps = endpoints(pk)
     if eps:
         L.append(f"端点 {len(eps)}")

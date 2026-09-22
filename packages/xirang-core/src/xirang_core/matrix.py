@@ -145,15 +145,32 @@ def points(pkg: Pkg) -> list[tuple[str, dict, bool]]:
         derived = _auto(knobs)
 
     skips = [dict(s) for s in (t.get("skip") or [])]
+    held: list[tuple[str, str, str]] = []
     out: list[tuple[str, dict, bool]] = []
     seen: set = set()
     for ov, hand in ([(p, False) for p in derived]
                      + [(dict(e), True) for e in (t.get("extra") or [])]):
         if not hand and any(_matches(s, ov) for s in skips):
             continue
+        # 守卫说不提供的组合就不提供。跑了再红等于让每个人去读一遍上游文档
+        full = {k: v.get("default") for k, v in knobs.items()} | ov
+        if not hand and (hit := pkg.offends(full)):
+            held.append((label(ov), hit[0], hit[1]))
+            continue
         key = tuple(sorted(ov.items(), key=lambda kv: kv[0]))
         if key in seen:
             continue
         seen.add(key)
         out.append((label(ov), ov, hand))
+    _held[pkg.name] = held
     return out
+
+
+_held: dict[str, list[tuple[str, str, str]]] = {}
+
+
+def withheld(pkg) -> list[tuple[str, str, str]]:
+    """守卫挡下来、没有进矩阵的点：(点名, 旋钮, 为什么)。"""
+    if pkg.name not in _held:
+        points(pkg)
+    return _held[pkg.name]

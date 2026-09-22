@@ -24,6 +24,7 @@ def val(v):
 def fake(name, *, asm=False, lib=False, knobs=None, ip=None, targets=None,
          regmap=None, root="/x"):
     return SimpleNamespace(
+        guards=lambda: [],
         name=name, root=root, is_assembly=asm, is_library=lib,
         knobs=lambda: knobs or {}, ip=ip or {"version": "0.1.0"},
         regmap=regmap, targets=lambda: targets or {"regs": {"driver": "regs"}})
@@ -122,11 +123,11 @@ PINS_RES = Resolved(top="soc", bus="apb4", area_um2=0.0, instances=[
     Instance(name="uart0", of="uart", values={}, area_um2=1.0),
 ])
 PINS_PKGS = {
-    "uart": SimpleNamespace(ip={
+    "uart": SimpleNamespace(guards=lambda: [], ip={
         "contract": {"ctrl": {"shape": "flat", "aw": 8, "dw": 32}},
         "emit": [{"kind": "bsv", "pins": [{"name": "pins", "type": "UartPins"}]}]}),
     # 发起口接进交换网，不引到顶层，所以不该出现在引脚表里
-    "hart": SimpleNamespace(ip={
+    "hart": SimpleNamespace(guards=lambda: [], ip={
         "contract": {"ctrl": {"shape": "none"}},
         "emit": [{"kind": "bsv", "pins": [{"name": "imem", "type": "RegManager"}]}]}),
 }

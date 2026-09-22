@@ -78,3 +78,74 @@ def receipt(pkg: Pkg, vals) -> list[tuple[str, str]]:
             out.append(("XR-FGN-002",
                         f"参数 {k} 要的是 {v}，展开之后是 {pars[k]}"))
     return out
+
+
+def _camel(name: str) -> str:
+    a, *rest = name.lower().split("_")
+    return a + "".join(w[:1].upper() + w[1:] for w in rest)
+
+
+def _groups(ports: dict, skip: set) -> tuple[dict[str, list[str]], list[str]]:
+    """按公共前缀把端口归组。整组协议写 prefix，零散的线逐根 map。
+
+    前缀是数出来的，不是猜的：`mem_axi_awvalid` 与 `mem_axi_rdata` 共有 `mem_axi_`，
+    而 `trap` 谁也不跟。三根以上才算一组——两根凑一组多半是巧合。
+    """
+    names = [n for n in ports if n not in skip]
+    best: dict[str, list[str]] = {}
+    for n in names:
+        parts = n.split("_")
+        for k in range(len(parts) - 1, 0, -1):
+            pre = "_".join(parts[:k]) + "_"
+            best.setdefault(pre, []).append(n)
+    groups: dict[str, list[str]] = {}
+    taken: set[str] = set()
+    for pre in sorted(best, key=lambda p: (-len(best[p]), p)):
+        rest = [n for n in best[pre] if n not in taken]
+        if len(rest) >= 3:
+            groups[pre] = sorted(rest)
+            taken |= set(rest)
+    return groups, sorted(n for n in names if n not in taken)
+
+
+def draft(files, top: str, clock: str = "clk", reset: str = "rst_n") -> str:
+    """从别人的 RTL 出一份声明草稿：全部参数、按前缀归好的端点。
+
+    草稿是起点不是终点——端点的 kind 与 role 要人去判，profile 要人去认。
+    但「参数漏了一个」「端口名抄错了」这两类错，草稿一出来就不存在了。
+    """
+    from xirang_back import sv
+    if not sv.available():
+        raise Bad("出草稿要 pyslang：pip install xirang[sv]")
+    got = sv.elaborate(files, top, {})
+    if got is None:
+        raise Bad("出草稿要 pyslang")
+    ports, pars, errs = got
+    if errs:
+        raise Bad(f"{top} 展开不了：{errs[0]}")
+
+    L = ["params:"]
+    feats = ["features:"]
+    proj = []
+    for k, v in sorted(pars.items()):
+        kn = _camel(k)
+        proj.append(f"    {k}: {kn}")
+        if isinstance(v, int) and v in (0, 1):
+            feats += [f"  {kn}:", "    type: bool", f"    default: {str(bool(v)).lower()}"]
+        else:
+            L += [f"  {kn}:", "    type: int",
+                  f"    default: {v if isinstance(v, int) else 0}"]
+    groups, loose = _groups(ports, {clock, reset})
+    P = ["emit:", "- kind: foreign", "  lang: verilog", f"  top: {top}",
+         "  rtl: []      # 填上综合视图的文件", "  params:"] + proj + [
+        "  clock:", f"    port: {clock}", "  reset:", f"    port: {reset}",
+        "    active: low", "    sync: true", "  ports:"]
+    for pre, ns in groups.items():
+        P += [f"  # {len(ns)} 根：{' '.join(ns[:4])}{' …' if len(ns) > 4 else ''}",
+              f"  - endpoint: {pre.rstrip('_')}", "    kind: transaction",
+              "    role: manager", "    profile: 填上它讲哪种协议",
+              f"    prefix: {pre}"]
+    if loose:
+        P += ["  - endpoint: pins", "    kind: physical", "    type: 填个类型名",
+              "    map:"] + [f"      {_camel(n)}: {n}" for n in loose]
+    return chr(10).join(L + feats + P)

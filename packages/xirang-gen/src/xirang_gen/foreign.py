@@ -20,7 +20,13 @@ def bake(pkg: Pkg, vals) -> dict[str, int]:
             vals[src].value if src in vals else None)
         if v is None:
             raise Bad(f"{pkg.name}: 参数 {pname} 投影的旋钮 {src} 没有解出取值")
-        out[pname] = int(v) if not isinstance(v, bool) else int(bool(v))
+        if isinstance(v, bool):
+            out[pname] = int(v)
+        elif isinstance(v, int):
+            out[pname] = v
+        else:
+            # 枚举档位（RV32MFast 这种）原样传给工具，别硬转成数
+            out[pname] = v
     return out
 
 
@@ -81,8 +87,16 @@ def receipt(pkg: Pkg, vals) -> list[tuple[str, str]]:
 
 
 def _camel(name: str) -> str:
-    a, *rest = name.lower().split("_")
-    return a + "".join(w[:1].upper() + w[1:] for w in rest)
+    """ENABLE_MUL -> enableMul；BusSizeECC -> busSizeECC。
+
+    上游两种命名都有：picorv32 用全大写加下划线，ibex 本来就是驼峰。一律先小写
+    再拼会把后者毁掉（BusSizeECC -> bussizeecc），那样旋钮名与上游参数对不上，
+    读的人得回去查表。
+    """
+    if "_" not in name:
+        return name[:1].lower() + name[1:]
+    a, *rest = name.split("_")
+    return a.lower() + "".join(w[:1].upper() + w[1:].lower() for w in rest)
 
 
 def _groups(ports: dict, skip: set) -> tuple[dict[str, list[str]], list[str]]:
@@ -127,14 +141,22 @@ def draft(files, top: str, clock: str = "clk", reset: str = "rst_n") -> str:
     L = ["params:"]
     feats = ["features:"]
     proj = []
+    skipped = []
     for k, v in sorted(pars.items()):
         kn = _camel(k)
+        if not isinstance(v, int):
+            # 数组、结构、枚举：不是标量，做不成旋钮。留在默认值上，并说出来——
+            # 「没做」写出来，比让人以为「已经全支持了」诚实
+            skipped.append(f"{k} = {str(v)[:40]}")
+            continue
         proj.append(f"    {k}: {kn}")
-        if isinstance(v, int) and v in (0, 1):
+        if v in (0, 1):
             feats += [f"  {kn}:", "    type: bool", f"    default: {str(bool(v)).lower()}"]
         else:
-            L += [f"  {kn}:", "    type: int",
-                  f"    default: {v if isinstance(v, int) else 0}"]
+            L += [f"  {kn}:", "    type: int", f"    default: {v}"]
+    if skipped:
+        L.insert(1, f"  # 这 {len(skipped)} 个不是标量，本版留在默认值上：")
+        L[2:2] = [f"  #   {x}" for x in skipped]
     groups, loose = _groups(ports, {clock, reset})
     P = ["emit:", "- kind: foreign", "  lang: verilog", f"  top: {top}",
          "  rtl: []      # 填上综合视图的文件", "  params:"] + proj + [

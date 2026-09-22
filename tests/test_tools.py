@@ -1,0 +1,89 @@
+"""外部工具：只驱动，不打包；参数在交给后端之前就展开掉。
+
+ecc 与 yosys-sta 不接受从外面传进来的 Verilog 参数——它们读文件、指定顶层，参数
+就取默认值。于是「息壤配好的那套旋钮」到了后端会悄悄变回上游默认，而没有任何一步
+会报错：面积与时序量的是另一颗核。所以配置解完就把参数展开掉。
+
+sv2v 做不了这件事（实测 `--top` 只删没被例化的模块，`parameter` 原样保留），
+它是 SystemVerilog 到 Verilog-2005 的翻译器，与展开参数是两件事。
+
+`uv run python tests/test_tools.py`
+"""
+import pathlib
+import sys
+from types import SimpleNamespace
+
+from xirang_back import tools
+from xirang_back.verilog import script
+from xirang_core.manifest import Bad
+from xirang_gen.foreign import bake
+
+
+def val(v):
+    return SimpleNamespace(value=v)
+
+
+PKG = SimpleNamespace(
+    name="pv",
+    foreign_emit=lambda: {"params": {"ENABLE_MUL": "enableMul",
+                                     "PROGADDR_RESET": "progaddrReset",
+                                     "FIFO": 8}})
+
+
+def main() -> int:
+    bad: list[str] = []
+
+    # 注册表：加一样只加一行，每样都说得出拿它做什么
+    rows = tools.survey()
+    if len(rows) < 10:
+        bad.append(f"工具表只有 {len(rows)} 样")
+    for n, _, what in rows:
+        if not what:
+            bad.append(f"{n} 没写拿它做什么")
+    if "sv2v" not in tools.TOOLS or "dot" not in tools.TOOLS:
+        bad.append("sv2v 或 dot 不在表里")
+    try:
+        tools.need("nosuchtool")
+        bad.append("找不到的工具没报错")
+    except tools.ToolError as e:
+        if "PATH" not in str(e):
+            bad.append(f"报错没说怎么办：{e}")
+
+    # yosys 脚本：chparam 必须在 hierarchy 之前，proc 不能少
+    sc = script(["a.v", "b.v"], "top", {"W": 16, "F": 1}, pathlib.Path("o.v"))
+    for want in ("read_verilog a.v", "read_verilog b.v",
+                 "chparam -set F 1 -set W 16 top", "hierarchy -top top -check",
+                 "proc", "write_verilog -noattr o.v"):
+        if want not in sc:
+            bad.append(f"脚本里少了 {want}")
+    if sc.index("chparam") > sc.index("hierarchy"):
+        bad.append("chparam 排到了 hierarchy 后面，那时参数已经定死了")
+    if sc.index("proc") > sc.index("write_verilog"):
+        bad.append("proc 排到了写出之后")
+    # 只 hierarchy 不 proc，yosys 自己会警告「进程不一定映射得回 always 块」
+    if "proc" not in sc:
+        bad.append("没有 proc")
+
+    # 参数投影：布尔按 1/0，字面值照用
+    got = bake(PKG, {"enableMul": val(True), "progaddrReset": val(0x10000)})
+    if got != {"ENABLE_MUL": 1, "PROGADDR_RESET": 65536, "FIFO": 8}:
+        bad.append(f"投影错了：{got}")
+    try:
+        bake(PKG, {"enableMul": val(True)})
+        bad.append("旋钮没解出取值时没报错")
+    except Bad:
+        pass
+
+    for line in bad:
+        print(f"✘ {line}")
+    if not bad:
+        print(f"✔ {len(rows)} 样工具各有用途；展开脚本的次序对；参数投影对，漏一个就报")
+    return 1 if bad else 0
+
+
+def test_tools():
+    assert main() == 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

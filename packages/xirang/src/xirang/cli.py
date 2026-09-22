@@ -9,6 +9,7 @@ import sys
 
 import yaml
 
+from xirang_back import tools
 from xirang_core import diag
 from xirang_core.manifest import GEN_HW, GEN_SW
 from xirang_area import check as area_check
@@ -186,6 +187,20 @@ def cmd_lint(args) -> int:
 
 
 # ---------------------------------------------------------------- tree
+
+def cmd_doctor(args) -> int:
+    """外部工具在不在、哪个版本。价目表的口径钉的就是这些版本。"""
+    rows = [(n, v, w) for n, v, w in tools.survey()]
+    print(view.table(("工具", "版本", "拿它做什么"), rows))
+    miss = [n for n, v, _ in rows if v == "缺"]
+    print()
+    if miss:
+        print(f"缺 {len(miss)} 个：{' '.join(miss)}")
+        print(f"{DIM}缺的那几样只影响用到它们的那一步，别的照跑{OFF}")
+    else:
+        print("都在")
+    return 0
+
 
 def cmd_list(args) -> int:
     """搜索路径上有哪些包。像 pip list 那样先看见，才谈得上用。"""
@@ -584,6 +599,9 @@ def main(argv=None) -> int:
     c = sub.add_parser("config", help="computed 面板")
     common(c); c.add_argument("--why", help="一条旋钮或一道检查的来历，如 gpio0.numPins、XR-AREA-003")
     c.set_defaults(fn=cmd_config)
+
+    doc = sub.add_parser("doctor", help="外部工具在不在、哪个版本")
+    doc.set_defaults(fn=cmd_doctor)
 
     ls = sub.add_parser("list", help="搜索路径上有哪些包")
     ls.add_argument("-k", "--kind", choices=["ip", "lib", "asm"])

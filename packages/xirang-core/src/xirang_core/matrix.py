@@ -156,7 +156,7 @@ def points(pkg: Pkg) -> list[tuple[str, dict, bool]]:
         # 守卫先修正，修不动才不提供。换了国家是重填省份，不是关掉表单——
         # 把 RV32 那个点整个删掉，等于因为一个联动字段丢掉了半个架构的覆盖
         name = label(ov)
-        full = {k: v.get("default") for k, v in knobs.items()} | ov
+        full = pkg.settled(ov)
         if not hand:
             full, fix = _repair(pkg, full, set(ov), knobs)
             if hit := pkg.offends(full):
@@ -191,7 +191,7 @@ def _repair(pkg, full: dict, varied: set, knobs: dict) -> tuple[dict, dict]:
         keep = [v for g in pkg.guards() if all(full.get(a) == b
                                                for a, b in g["when"].items())
                 for v in g["narrow"].get(k, [])]
-        d = knobs.get(k, {}).get("default")
+        d = full.get(k, knobs.get(k, {}).get("default"))
         full[k] = fix[k] = d if d in keep else (
             min(keep, key=lambda v: abs(v - d))
             if all(isinstance(v, int) and not isinstance(v, bool) for v in keep)

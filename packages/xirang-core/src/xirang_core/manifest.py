@@ -596,6 +596,24 @@ class Pkg:
             out.append(g)
         return out
 
+    def settled(self, ov: dict | None = None) -> dict:
+        """默认值加上这一组覆盖，条件默认值也算进去。
+
+        矩阵要的是「这个点实际会解出什么」，不是清单字面上的 default——
+        cva6 的 MemTidWidth 在 32 位模板下是 4，照字面取 2 会把写缓冲多收窄一档。
+        """
+        knobs = self.knobs()
+        vals = {k: v.get("default") for k, v in knobs.items()} | (ov or {})
+        for _ in range(2):
+            for k, spec in knobs.items():
+                if k in (ov or {}):
+                    continue
+                for c in spec.get("when_default") or []:
+                    if all(vals.get(a) == b for a, b in c["when"].items()):
+                        vals[k] = c["value"]
+                        break
+        return vals
+
     def narrowed(self, vals: dict) -> dict[str, list]:
         """在这组取值下，哪些旋钮的取值域被收窄成了什么。`show` 与解析都读它。"""
         got: dict[str, list] = {}

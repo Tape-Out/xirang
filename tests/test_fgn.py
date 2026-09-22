@@ -57,7 +57,7 @@ def main() -> int:
 
     # slang 给的是 ConstantValue，int() 直接用会抛。吞掉这个异常，整条枚举通路
     # 看着像没实现——枚举列表会静默变成空
-    for src, want in (("2", 2), ("32'd65536", 65536), ("1'b1", 1), ("32'h10", 16)):
+    for src, want in (("2", 2), ("32'd65536", 65536), ("1'b1", 1), ("32'h10", 16), ("32'sd3", 3), ("8'o17", 15)):
         if _num(src) != want:
             bad.append(f"{src} 解成了 {_num(src)}，应是 {want}")
     if _num("MINI") != "MINI":

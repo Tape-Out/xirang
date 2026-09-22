@@ -43,10 +43,21 @@ def _num(v):
     它给的是 ConstantValue，`int()` 直接用会抛——枚举成员的值就是这么被我
     悄悄吞掉的，结果整条枚举通路看着像没实现。
     """
-    txt = str(v)
+    txt = str(v).replace("_", "").strip()
+    if "'" in txt:
+        # 32'h10 是十六进制的 16，不是十进制的 10。基数写在引号后面那个字母上，
+        # 把它剥掉再按十进制读，读出来的是另一个数而且不会报错
+        tail = txt.split("'")[-1]
+        if tail[:1].lower() == "s":      # 32'sd3：有符号的 s 排在基数字母前面
+            tail = tail[1:]
+        base = {"b": 2, "o": 8, "d": 10, "h": 16}.get(tail[:1].lower())
+        digits = tail if base is None else tail[1:]
+        try:
+            return int(digits, base or 10)
+        except ValueError:
+            return txt
     try:
-        return (int(txt.split("'")[-1].lstrip("bdhox") or 0, 0)
-                if "'" in txt else int(txt))
+        return int(txt)
     except ValueError:
         return txt
 

@@ -94,13 +94,19 @@ def summary(res: Resolved, pkgs: dict[str, Pkg]) -> str:
         for e in eps[1:]:
             L.append(f"{pad}{_pad(e[0], we)} {_pad(e[1], 15)} {' ' * 25}  {e[2]}")
         loose += sum(1 for e in eps if e[1].startswith("phys/"))
-    L += [rule, f"实例 {n} · 引到顶层的物理端点 {loose} · 合计 {res.area_um2:,.2f} µm²"]
+    tail = f"实例 {n} · 引到顶层的物理端点 {loose} · 合计 {res.area_um2:,.2f} µm²"
+    if res.unpriced:
+        # 没量出来就说没量出来，还要点名——不点名的话，读者会把合计里别处来的
+        # 数当成它的面积
+        tail += "（" + "、".join(sorted(set(res.unpriced))) + " 没有价目表，未计入）"
+    L += [rule, tail]
     return "\n".join(L)
 
 
 def as_json(res: Resolved, pkgs: dict[str, Pkg]) -> str:
     top = pkgs.get(res.top)
     doc = {"top": res.top, "bus": res.bus, "area_um2": res.area_um2,
+           "unpriced": sorted(set(res.unpriced)),
            # 构建目标在这里出，CI 就不必再 grep ip.yaml 猜
            "targets": top.targets() if top else {},
            "instances": []}

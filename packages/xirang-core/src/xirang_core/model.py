@@ -49,6 +49,8 @@ class Resolved:
     bus: str
     instances: list[Instance]
     area_um2: float = 0.0
+    # 没有价目表的包：面积留零，但要说得出是哪几个
+    unpriced: list[str] = dataclasses.field(default_factory=list)
 
     def walk(self):
         def rec(insts, depth):

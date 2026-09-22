@@ -53,7 +53,7 @@ def _resolve(args) -> tuple[Resolved, dict[str, Pkg]]:
     ws = wsman.find(search)
     res = resolve(args.top, search, cli=cli, ws=ws)
     pkgs = find.load_all(search)
-    annotate(res, pkgs)
+    annotate(res, pkgs, lenient=True)
     # 库包也要查。原来只查作为实例出现的包，于是 hwcore 与 amba 改了源码
     # 也没人报警——而它们是全库踩着的那一层，改一行影响每一个 IP。
     for name in sorted(pkgs):

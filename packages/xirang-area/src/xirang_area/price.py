@@ -165,12 +165,24 @@ def price(pkg: Pkg, vals, lift: bool = True) -> tuple[float, dict[str, float]]:
 ASM_BAND = 0.20
 
 
-def annotate(res: Resolved, pkgs: dict[str, Pkg]) -> Resolved:
-    """把面积填进每个实例，并逐层累加。"""
+def annotate(res: Resolved, pkgs: dict[str, Pkg], lenient: bool = False) -> Resolved:
+    """把面积填进每个实例，并逐层累加。
+
+    `lenient` 给只是要看一眼的命令用（`inspect`、`tree`）：没有价目表的包记进
+    `res.unpriced`，面积留零**而且看得见**，不把整条命令挡掉。诊断闸门里
+    XR-AREA-006 本来就是 info——它不该挡仿真，也不该挡「打印出来看看」。
+    报总数的地方仍然照旧抛错：那里缺一块就是在骗人。
+    """
     def rec(insts: list[Instance]) -> float:
         s = 0.0
         for i in insts:
-            own, per_knob = price(pkgs[i.of], i.values, lift=False)
+            try:
+                own, per_knob = price(pkgs[i.of], i.values, lift=False)
+            except Bad:
+                if not lenient:
+                    raise
+                res.unpriced.append(i.of)
+                own, per_knob = 0.0, {}
             for k, c in per_knob.items():
                 i.values[k].area_um2 = c
             i.area_um2 = own + rec(i.children)

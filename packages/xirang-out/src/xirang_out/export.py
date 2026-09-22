@@ -106,6 +106,16 @@ def _cond(prefix: str, when: dict, knobs: dict) -> str:
     return " && ".join(bits) if len(bits) == 1 else "(" + ") && (".join(bits) + ")"
 
 
+def _condef(prefix: str, spec: dict, knobs: dict) -> list[str]:
+    """条件默认值。kconfig 取第一条成立的 default，所以它们排在无条件的前面。"""
+    return [f"	default {_kval(spec, c['value'])} if ({_cond(prefix, c['when'], knobs)})"
+            for c in spec.get("when_default") or []]
+
+
+def _kval(spec: dict, v):
+    return ("y" if v else "n") if isinstance(v, bool) else v
+
+
 def _gates(pkg, prefix: str, name: str, knobs: dict) -> tuple[list[str], list[str]]:
     """这个旋钮被哪些守卫收窄。返回 (条目内的行, choice 里逐档的 depends)。
 
@@ -146,8 +156,9 @@ def _knob_entries(inst: Instance, pkg, prefix: str) -> list[str]:
         sym = _sym(prefix, name)
         desc = spec.get("desc") or name
         if spec.get("type") == "bool":
-            L += [f'config {sym}', f'	bool "{desc}"',
-                  f'	default {"y" if v.value else "n"}']
+            L += [f'config {sym}', f'	bool "{desc}"']
+            L += _condef(prefix, spec, knobs)
+            L.append(f'	default {"y" if v.value else "n"}')
             for dep in spec.get("depends", []) or []:
                 L.append(f"	depends on {_sym(prefix, dep)}")
             L += _gates(pkg, prefix, name, knobs)[0]
@@ -167,7 +178,9 @@ def _knob_entries(inst: Instance, pkg, prefix: str) -> list[str]:
                     L.append("	" + per[val])
             L.append("endchoice")
         else:
-            L += [f'config {sym}', f'	int "{desc}"', f'	default {v.value}']
+            L += [f'config {sym}', f'	int "{desc}"']
+            L += _condef(prefix, spec, knobs)
+            L.append(f'	default {v.value}')
             # 条件区间要排在无条件区间前面：kconfig 取第一条成立的
             L += _gates(pkg, prefix, name, knobs)[0]
             r = spec.get("range")

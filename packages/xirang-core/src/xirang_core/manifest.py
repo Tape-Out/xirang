@@ -629,7 +629,12 @@ class Pkg:
         return out
 
     def _exposed(self) -> dict[str, dict]:
-        out: dict[str, dict] = {}
+        """上游那几份模板各扫一遍。同一个常量在不同模板里取值不同时，
+        它的默认值就是条件的——照搬先扫到的那份，等于把甲模板的值套给乙模板。
+        cva6 就这么把 64 位那份的 MemTidWidth=2 套进了 32 位那份，
+        而 32 位走的是 hpdcache，ID 位不够装写缓冲，展开当场 $fatal。
+        """
+        got: dict[str, list] = {}
         for e in self.ip.get("emit", []) or []:
             if e.get("kind") != "foreign":
                 continue
@@ -640,17 +645,22 @@ class Pkg:
                 if not src.is_file():
                     continue
                 skip = set(g.get("skip") or ())
-                dom = g.get("domain") or {}
                 for name, raw in re.findall(FIND[g.get("syntax", "localparam")],
                                             src.read_text(encoding="utf-8")):
-                    if name in skip or name in out:
-                        continue
                     kind, default = _guess(raw)
-                    if kind is None:
-                        continue      # 引用别的常量、枚举、表达式：认不出就不暴露
-                    out[name] = ({"type": "choice", "values": dom[name],
-                                  "default": default, "kind": "param"}
-                                 if name in dom else
-                                 {"type": kind, "default": default,
-                                  "kind": "feature" if kind == "bool" else "param"})
+                    if name in skip or kind is None:
+                        continue   # 引用别的常量、枚举、表达式：认不出就不暴露
+                    got.setdefault(name, []).append(
+                        (g.get("when") or {}, kind, default, g.get("domain") or {}))
+
+        out: dict[str, dict] = {}
+        for name, rows in got.items():
+            when0, kind, default, dom = rows[0]
+            spec = ({"type": "choice", "values": dom[name], "default": default,
+                     "kind": "param"} if name in dom else
+                    {"type": kind, "default": default,
+                     "kind": "feature" if kind == "bool" else "param"})
+            if alt := [(w, d) for w, _, d, _ in rows[1:] if d != default]:
+                spec["when_default"] = [{"when": w, "value": d} for w, d in alt]
+            out[name] = spec
         return out

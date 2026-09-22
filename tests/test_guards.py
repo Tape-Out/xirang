@@ -79,17 +79,27 @@ def main() -> int:
         root = pathlib.Path(d) / "t"
         pkg = mk(root)
 
-        # 一、矩阵不提供踩守卫的点，而且说得出为什么
+        # 一、矩阵先修正联动字段，而不是把这个点整个丢掉。换了国家重填省份，
+        # 不是关掉表单——为一个联动字段丢掉 rvf=n 那条腿等于少测半个配置空间
         pts = matrix.points(pkg)
         for name, ov, _ in pts:
             full = {"rvf": True, "rvd": True, "flen": 64} | ov
             if full["rvf"] is False and full["rvd"] is True:
                 bad.append(f"矩阵仍在提供被守卫排除的点 {name}")
-        why = [w for _, k, w in matrix.withheld(pkg) if k == "rvd"]
-        if not why or "双精度" not in why[0]:
-            bad.append(f"挡下来的点没说清理由：{matrix.withheld(pkg)}")
+        if not any(n == "RvfOff" for n, _, _ in pts):
+            bad.append("rvf 那条腿被整条丢掉了，本该修正 rvd 之后留下")
+        fix = dict(matrix.adjusted(pkg)).get("RvfOff", {})
+        # 联动是会串的：rvd 关掉之后 flen 的域跟着收窄，默认的 64 也得跟着挪
+        if fix != {"rvd": False, "flen": 32}:
+            bad.append(f"联动没一路修到底：{matrix.adjusted(pkg)}")
 
-        # 二、显式指定被排除的值，当场报错并带上 why
+        # 二、修不动就不提供：全展开时每个字段都是本点要试的，替谁改值都没意义
+        fl = mk(pathlib.Path(d) / "f", {**BASE, "test": {"matrix": "full"}})
+        why = [w for _, k, w in matrix.withheld(fl) if k == "rvd"]
+        if not why or "双精度" not in why[0]:
+            bad.append(f"全展开时该挡的没挡，或没说清理由：{matrix.withheld(fl)}")
+
+        # 三、显式指定被排除的值，当场报错并带上 why
         from xirang_core.resolve import resolve
         try:
             resolve(pkg.name, [pkg.root.parent], cli={"rvf": False, "rvd": True})
@@ -98,7 +108,7 @@ def main() -> int:
             if "双精度" not in str(e):
                 bad.append(f"报错没引用 why：{e}")
 
-        # 三、判据交给 kconfiglib：条件成立时那个符号不可选
+        # 四、判据交给 kconfiglib：条件成立时那个符号不可选
         txt = kconfig_of(pkg)
         if visible(txt, "T_RVD", {"T_RVF": 0}):
             bad.append("rvf=n 时 kconfiglib 仍认为 rvd 可选")
@@ -110,7 +120,7 @@ def main() -> int:
         if active_range(txt, "T_FLEN", {"T_RVD": 2}) != (0, 64):
             bad.append("rvd=y 时 flen 的区间被连累了")
 
-        # 四、清单自己要站得住
+        # 五、清单自己要站得住
         for ip, want in [
             ({**BASE, "guards": [{"when": {"rvf": False},
                                   "narrow": {"rvd": [False]}}]}, "why"),

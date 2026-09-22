@@ -85,9 +85,33 @@ def _apply_constraints(pkg: Pkg, knobs, vals):
                     vals[k].forced_by = f"depends on {dep}"
                     changed = True
 
-    if hit := pkg.offends({k: v.value for k, v in vals.items()}):
+    # 条件默认值：上游哪份模板当选，这个字段的默认就取哪份的。用户自己点过的不动
+    for k, spec in knobs.items():
+        if vals[k].winner.layer != "bsv-default":
+            continue
+        for c in spec.get("when_default") or []:
+            if all(vals[a].value == b for a, b in c["when"].items() if a in vals):
+                vals[k].value = c["value"]
+                vals[k].forced_by = f"模板默认：{c['when']}"
+                break
+
+    # 守卫与 depends 同一个规矩：用户自己点的报错，默认带出来的就地修正。
+    # 只说了「按 32 位来」的人不该被一个他没提过的浮点字段拦住
+    for _ in range(len(pkg.guards()) + 1):
+        hit = pkg.offends({k: v.value for k, v in vals.items()})
+        if hit is None:
+            break
         knob, why = hit
-        raise Bad(f"{knob}={vals[knob].value} 被守卫排除了：{why}")
+        if vals[knob].winner.layer in ("instance", "cli"):
+            raise Bad(f"{knob}={vals[knob].value} 被守卫排除了：{why}")
+        keep = [v for g in pkg.guards()
+                if all(vals[a].value == b for a, b in g["when"].items()
+                       if a in vals)
+                for v in g["narrow"].get(knob, [])]
+        vals[knob].value = keep[0]
+        vals[knob].forced_by = f"guard: {why}"
+    else:
+        raise Bad("守卫求解不收敛，检查 guards 的 when 与 narrow 是否互相成环")
     for c in pkg.ip.get("constraints", []) or []:
         when, then = c.get("when", {}), c.get("then", {})
         if all(vals[k].value == v for k, v in when.items() if k in vals):

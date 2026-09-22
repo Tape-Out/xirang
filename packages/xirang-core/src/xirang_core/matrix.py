@@ -146,31 +146,68 @@ def points(pkg: Pkg) -> list[tuple[str, dict, bool]]:
 
     skips = [dict(s) for s in (t.get("skip") or [])]
     held: list[tuple[str, str, str]] = []
+    fixed: list[tuple[str, dict]] = []
     out: list[tuple[str, dict, bool]] = []
     seen: set = set()
     for ov, hand in ([(p, False) for p in derived]
                      + [(dict(e), True) for e in (t.get("extra") or [])]):
         if not hand and any(_matches(s, ov) for s in skips):
             continue
-        # 守卫说不提供的组合就不提供。跑了再红等于让每个人去读一遍上游文档
+        # 守卫先修正，修不动才不提供。换了国家是重填省份，不是关掉表单——
+        # 把 RV32 那个点整个删掉，等于因为一个联动字段丢掉了半个架构的覆盖
+        name = label(ov)
         full = {k: v.get("default") for k, v in knobs.items()} | ov
-        if not hand and (hit := pkg.offends(full)):
-            held.append((label(ov), hit[0], hit[1]))
-            continue
+        if not hand:
+            full, fix = _repair(pkg, full, set(ov), knobs)
+            if hit := pkg.offends(full):
+                held.append((name, hit[0], hit[1]))
+                continue
+            if fix:
+                ov = {**ov, **fix}
+                fixed.append((name, fix))
         key = tuple(sorted(ov.items(), key=lambda kv: kv[0]))
         if key in seen:
             continue
         seen.add(key)
-        out.append((label(ov), ov, hand))
-    _held[pkg.name] = held
+        out.append((name if not hand else label(ov), ov, hand))
+    _held[pkg.path] = held
+    _fixed[pkg.path] = fixed
     return out
 
 
 _held: dict[str, list[tuple[str, str, str]]] = {}
+_fixed: dict[str, list[tuple[str, dict]]] = {}
+
+
+def _repair(pkg, full: dict, varied: set, knobs: dict) -> tuple[dict, dict]:
+    """把联动字段挪进允许的取值域。本点正在变的那个字段不动——
+    那个点存在的意义就是试它，替它改值等于没测。"""
+    full, fix = dict(full), {}
+    for _ in range(len(pkg.guards()) + 1):
+        hit = pkg.offends(full)
+        if hit is None or hit[0] in varied:
+            break
+        k = hit[0]
+        keep = [v for g in pkg.guards() if all(full.get(a) == b
+                                               for a, b in g["when"].items())
+                for v in g["narrow"].get(k, [])]
+        d = knobs.get(k, {}).get("default")
+        full[k] = fix[k] = d if d in keep else (
+            min(keep, key=lambda v: abs(v - d))
+            if all(isinstance(v, int) and not isinstance(v, bool) for v in keep)
+            and isinstance(d, int) and not isinstance(d, bool) else keep[0])
+    return full, fix
+
+
+def adjusted(pkg) -> list[tuple[str, dict]]:
+    """为了满足守卫被顺手改掉的联动字段：(点名, 改成什么)。"""
+    if pkg.path not in _fixed:
+        points(pkg)
+    return _fixed[pkg.path]
 
 
 def withheld(pkg) -> list[tuple[str, str, str]]:
     """守卫挡下来、没有进矩阵的点：(点名, 旋钮, 为什么)。"""
-    if pkg.name not in _held:
+    if pkg.path not in _held:
         points(pkg)
-    return _held[pkg.name]
+    return _held[pkg.path]

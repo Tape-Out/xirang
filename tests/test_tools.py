@@ -65,6 +65,14 @@ def main() -> int:
     if "proc" not in sc:
         bad.append("没有 proc")
 
+    # 宏要跟着一起给：picorv32 的 rvfi 端口在 `RISCV_FORMAL` 里，不给宏它们
+    # 压根不存在——而「端口少了一组」不会报错，只会在接线时变成对不上的名字
+    sc = script(["a.v"], "top", {}, pathlib.Path("o.v"), ("RISCV_FORMAL", "SYNTHESIS"))
+    if "-DRISCV_FORMAL" not in sc or "-DSYNTHESIS" not in sc:
+        bad.append(f"脚本里没给宏：{sc[:80]}")
+    if "read_verilog-D" in sc:
+        bad.append("宏与 read_verilog 之间少了空格")
+
     # 矩阵点的标签是把旋钮名串起来的。picorv32 有 25 个旋钮，全开那一点的标签
     # 三百多字符，直接当文件名会撞上 255 字节的上限——而 iverilog 报出来的是
     # 「文件名过长」，看着像上游的核有问题

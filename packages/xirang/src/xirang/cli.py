@@ -292,7 +292,7 @@ def cmd_wrap(args) -> int:
         out = pathlib.Path(args.out or (pkg.root / "wrap"))
         got = verilog.elaborate(foreign.files(pkg), fe["top"],
                                 foreign.bake(pkg, vals),
-                                out / f"{fe['top']}.v")
+                                out / f"{fe['top']}.v", foreign.defines(pkg))
         print(f"{got}")
         baked = ", ".join(f"{k}={v}" for k, v in sorted(foreign.bake(pkg, vals).items()))
         print(f"  {DIM}{fe['top']}  参数已展开：{baked}{OFF}")

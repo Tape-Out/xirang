@@ -31,6 +31,12 @@ def bake(pkg: Pkg, vals) -> dict[str, int]:
     return out
 
 
+def defines(pkg: Pkg) -> list[str]:
+    """这份黑盒要带哪些宏。"""
+    e = pkg.foreign_emit()
+    return list((e or {}).get("defines") or [])
+
+
 def files(pkg: Pkg, view: str = "rtl") -> list[pathlib.Path]:
     """综合视图或仿真视图的文件，按包根解成绝对路径。"""
     e = pkg.foreign_emit()
@@ -54,7 +60,8 @@ def receipt(pkg: Pkg, vals) -> list[tuple[str, str]]:
         return [("XR-FGN-003", f"{pkg.name}：装 pyslang 才核对得了黑盒声明"
                                f"（pip install xirang[sv]）")]
     want = bake(pkg, vals)
-    got = sv.elaborate(files(pkg), e["top"], {k: str(v) for k, v in want.items()})
+    got = sv.elaborate(files(pkg), e["top"],
+                       {k: str(v) for k, v in want.items()}, defines(pkg))
     ports, pars, errs = got
     out: list[tuple[str, str]] = []
     if errs:
@@ -210,7 +217,9 @@ def draft(files, top: str, clock: str = "clk", reset: str = "rst_n") -> str:
         L[2:2] = [f"  #   {x}" for x in skipped]
     groups, loose = _groups(ports, {clock, reset})
     P = ["emit:", "- kind: foreign", "  lang: verilog", f"  top: {top}",
-         "  rtl: []      # 填上综合视图的文件", "  params:"] + proj + [
+         "  rtl: []      # 填上综合视图的文件",
+         "  # defines: []   # 要开的宏，如 RISCV_FORMAL",
+         "  params:"] + proj + [
         "  clock:", f"    port: {clock}", "  reset:", f"    port: {reset}",
         "    active: low", "    sync: true", "  ports:"]
     for pre, ns in groups.items():
@@ -234,7 +243,7 @@ def elaborates(pkg: Pkg, vals) -> list[str]:
     if e is None or not sv.available():
         return []
     got = sv.elaborate(files(pkg), e["top"],
-                       {k: str(v) for k, v in bake(pkg, vals).items()})
+                       {k: str(v) for k, v in bake(pkg, vals).items()}, defines(pkg))
     if got is None:
         return []
     _, _, errs = got

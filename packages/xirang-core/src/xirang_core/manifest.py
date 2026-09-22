@@ -71,7 +71,7 @@ GEN_TEST = "htest"
 DRIVERS = {"regs", "flat", "bsv", "assembly", "library", "foreign", "none"}
 
 # 黑盒声明认的键。黑盒不解析源码，这份声明就是它的全部形状。
-FOREIGN_KEYS = {"kind", "lang", "top", "rtl", "sim", "params",
+FOREIGN_KEYS = {"kind", "lang", "top", "rtl", "sim", "params", "defines",
                 "clock", "reset", "ports", "limits"}
 PORT_KEYS = {"endpoint", "kind", "role", "profile", "prefix", "type", "map"}
 EP_KINDS = {"transaction", "stream", "event", "physical"}
@@ -299,12 +299,18 @@ class Pkg:
                     raise Bad(f"regmap 与 ip.yaml 的 contract.{k} 不一致：{c[k]} vs {ic[k]}")
 
     def upstream_tests(self) -> list[dict]:
-        """上游自带的测试台。接别人的核，最有说服力的是它自己的测试还过。"""
+        """上游自带的测试台。接别人的核，最有说服力的是它自己的测试还过。
+
+        `params` 是「测试台的参数名 -> 我们的旋钮名」，`fixed` 是写死的值。
+        两者分开写，是因为测试台里的被测模块常常**不是**综合顶层那一个：SERV 的
+        测试台测的是 `servant`，参数名与 `serv_rf_top` 对不上。混成一个键，
+        「这是旋钮名还是字面值」就只能靠猜，猜错了不报错。
+        """
         return list((self.ip.get("test") or {}).get("upstream") or [])
 
     def _check_upstream(self):
         for t in self.upstream_tests():
-            unknown = set(t) - {"name", "files", "dut"}
+            unknown = set(t) - {"name", "files", "dut", "params", "fixed"}
             if unknown:
                 raise Bad(f"{self.path}: test.upstream 有不认识的键 {sorted(unknown)}")
             for k in ("name", "files", "dut"):

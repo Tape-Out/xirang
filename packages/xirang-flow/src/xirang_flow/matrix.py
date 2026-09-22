@@ -190,9 +190,16 @@ def run(pkg: Pkg, index: dict[str, Pkg], *, out: pathlib.Path,
 
         # 再跑上游自己的测试，参数按这一点的取值覆盖进去
         if ups := pkg.upstream_tests():
-            want = foreign.bake(pkg, vals)
             for u in ups:
                 ran += 1
+                if u.get("params") or u.get("fixed"):
+                    want = {p: knobs[k] for p, k in (u.get("params") or {}).items()
+                            if k in knobs}
+                    want = {p: (int(v) if isinstance(v, bool) else v)
+                            for p, v in want.items()}
+                    want.update(u.get("fixed") or {})
+                else:
+                    want = foreign.bake(pkg, vals)
                 ok, o = iv.run([pkg.root / f for f in u["files"]], u["dut"],
                                want, work / "up", f"{u['name']}{lbl}")
                 if not ok:

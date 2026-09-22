@@ -22,9 +22,14 @@ def _tail(r) -> str:
     return chr(10) + chr(10).join((r.stderr or r.stdout).splitlines()[-12:])
 
 
-def script(files, top: str, params: dict, out: pathlib.Path) -> str:
-    """生成的 yosys 脚本。单独一个函数，好让判据不必真的跑 yosys 就能查。"""
-    lines = [f"read_verilog {f}" for f in files]
+def script(files, top: str, params: dict, out: pathlib.Path, defines=()) -> str:
+    """生成的 yosys 脚本。单独一个函数，好让判据不必真的跑 yosys 就能查。
+
+    宏要跟着一起给：picorv32 的 rvfi 那 177 根端口在 `RISCV_FORMAL` 里，不给宏
+    它们压根不存在——而「端口少了一组」不会报错，只会在接线时变成对不上的名字。
+    """
+    d = "".join(f" -D{x}" for x in defines)
+    lines = [f"read_verilog{d} {f}" for f in files]
     if params:
         sets = " ".join(f"-set {k} {v}" for k, v in sorted(params.items()))
         lines.append(f"chparam {sets} {top}")
@@ -33,10 +38,12 @@ def script(files, top: str, params: dict, out: pathlib.Path) -> str:
     return "; ".join(lines)
 
 
-def elaborate(files, top: str, params: dict, out: pathlib.Path) -> pathlib.Path:
+def elaborate(files, top: str, params: dict, out: pathlib.Path,
+              defines=()) -> pathlib.Path:
     """写出展开后的 Verilog，返回它的路径。"""
     out.parent.mkdir(parents=True, exist_ok=True)
-    r = subprocess.run([need("yosys"), "-q", "-p", script(files, top, params, out)],
+    r = subprocess.run([need("yosys"), "-q", "-p",
+                        script(files, top, params, out, defines)],
                        capture_output=True, text=True)
     if r.returncode != 0 or not out.is_file():
         tail = "\n".join((r.stderr or r.stdout).splitlines()[-12:])

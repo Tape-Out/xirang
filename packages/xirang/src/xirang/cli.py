@@ -4,6 +4,7 @@
 """
 import argparse
 import json
+import difflib
 import pathlib
 import sys
 
@@ -268,6 +269,22 @@ def cmd_gen(args) -> int:
     return 0
 
 
+def _sets(args, pkg) -> dict:
+    """`-s 旋钮=值`。名字写错从前会被悄悄丢掉，拿到的是默认配置——
+    面积与产物于是量的是另一种配置，而没有任何一步会报错。"""
+    knobs = pkg.knobs()
+    out = {}
+    for kv in args.set or []:
+        k, _, v = kv.partition("=")
+        if k not in knobs:
+            near = difflib.get_close_matches(k, knobs, 1)
+            raise Bad(f"{pkg.name} 没有旋钮 {k}"
+                      + (f"，是不是 {near[0]}" if near else "")
+                      + f"（有 {', '.join(sorted(knobs))}）")
+        out[k] = yaml.safe_load(v)
+    return out
+
+
 def cmd_wrap(args) -> int:
     """给一个叶子 IP 生成扁平端口顶层。装配没有这一层——它本身就是顶层。"""
     search = find.roots(args.path)
@@ -280,19 +297,18 @@ def cmd_wrap(args) -> int:
     if pkg.is_library:
         raise Bad(f"{args.top} 是库包，不会被例化，也就没有端口")
 
-    cli = {}
-    for kv in args.set or []:
-        k, _, v = kv.partition("=")
-        cli[k] = yaml.safe_load(v)
+    cli = _sets(args, pkg)
 
     # 黑盒：源码是别人的，我们不生成顶层，只把参数按解出来的配置展开掉。
     # ecc 与 yosys-sta 不接受从外面传参数，不展开就等于拿上游默认值去量面积。
     if (fe := pkg.foreign_emit()) is not None:
         vals = resolve_pkg(pkg, {}, f"{pkg.path} (default)", None, cli)
         out = pathlib.Path(args.out or (pkg.root / "wrap"))
-        got = verilog.elaborate(foreign.files(pkg), fe["top"],
-                                foreign.bake(pkg, vals),
-                                out / f"{fe['top']}.v", foreign.defines(pkg))
+        got = verilog.elaborate(foreign.files(pkg, knobs=foreign.knobs_of(vals)),
+                                fe["top"],
+                                foreign.numeric(pkg, vals),
+                                out / f"{fe['top']}.v", foreign.defines(pkg),
+                                foreign.includes(pkg), pkg.root)
         print(f"{got}")
         baked = ", ".join(f"{k}={v}" for k, v in sorted(foreign.bake(pkg, vals).items()))
         print(f"  {DIM}{fe['top']}  参数已展开：{baked}{OFF}")

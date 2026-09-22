@@ -22,13 +22,29 @@ def _tail(r) -> str:
     return chr(10) + chr(10).join((r.stderr or r.stdout).splitlines()[-12:])
 
 
-def script(files, top: str, params: dict, out: pathlib.Path, defines=()) -> str:
+def _under(paths, root: pathlib.Path | None):
+    """能相对就相对：递给 yosys 的路径会原样出现在产物里。"""
+    if root is None:
+        return list(paths)
+    out = []
+    for p in paths:
+        p = pathlib.Path(p)
+        try:
+            out.append(p.resolve().relative_to(root.resolve()))
+        except ValueError:
+            out.append(p)
+    return out
+
+
+def script(files, top: str, params: dict, out: pathlib.Path,
+           defines=(), includes=()) -> str:
     """生成的 yosys 脚本。单独一个函数，好让判据不必真的跑 yosys 就能查。
 
     宏要跟着一起给：picorv32 的 rvfi 那 177 根端口在 `RISCV_FORMAL` 里，不给宏
     它们压根不存在——而「端口少了一组」不会报错，只会在接线时变成对不上的名字。
     """
-    d = "".join(f" -D{x}" for x in defines)
+    d = ("".join(f" -D{x}" for x in defines)
+         + "".join(f" -I{x}" for x in includes))
     lines = [f"read_verilog{d} {f}" for f in files]
     if params:
         sets = " ".join(f"-set {k} {v}" for k, v in sorted(params.items()))
@@ -39,12 +55,30 @@ def script(files, top: str, params: dict, out: pathlib.Path, defines=()) -> str:
 
 
 def elaborate(files, top: str, params: dict, out: pathlib.Path,
-              defines=()) -> pathlib.Path:
-    """写出展开后的 Verilog，返回它的路径。"""
+              defines=(), includes=(), root: pathlib.Path | None = None
+              ) -> pathlib.Path:
+    """写出展开后的 Verilog，返回它的路径。
+
+    yosys 读不动 SystemVerilog 的包与结构（`package` 一行就是 syntax error），
+    所以 .sv 先过 sv2v 翻成 2005 再消参数。两件事互补：sv2v 不碰 parameter，
+    yosys 不认 SystemVerilog。
+    """
     out.parent.mkdir(parents=True, exist_ok=True)
+    files = list(files)
+    here = root
+    if any(str(f).endswith(".sv") for f in files):
+        files = [to_v2005(files, out.with_suffix(".sv2v.v"), top, defines, includes)]
+        defines = includes = ()   # 宏与 include 在翻译那一步就处理掉了
+        here = out.parent
+    # yosys 把源文件路径写进函数局部线的名字（`$func$<路径>:<行>$<序号>`），
+    # 绝对路径于是漏进产物：同一份配置换个输出目录就生成不同的 Verilog，摘要对不上。
+    # 在一个固定的基准目录下跑，只递相对路径，产物才跟目录无关
+    rel = _under(files, here)
     r = subprocess.run([need("yosys"), "-q", "-p",
-                        script(files, top, params, out, defines)],
-                       capture_output=True, text=True)
+                        script(rel, top, params, out.resolve(),
+                               defines, _under(includes, here))],
+                       capture_output=True, text=True,
+                       cwd=str(here) if here else None)
     if r.returncode != 0 or not out.is_file():
         tail = "\n".join((r.stderr or r.stdout).splitlines()[-12:])
         raise ToolError(f"展开 {top} 失败：\n{tail}")
@@ -80,14 +114,15 @@ def schematic(files, top: str, params: dict, out: pathlib.Path,
 
 
 def to_v2005(files, out: pathlib.Path, top: str | None = None,
-             defines=()) -> pathlib.Path:
+             defines=(), includes=()) -> pathlib.Path:
     """SystemVerilog 翻成 Verilog-2005。
 
     **它不展开参数**——实测 `--top` 只删没被例化的模块，`parameter` 原样保留。
     消参数是 `elaborate` 的事，这里只管让只吃 2005 的前端读得懂。
     """
     out.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [need("sv2v"), *[f"-D{d}" for d in defines]]
+    cmd = [need("sv2v"), *[f"-D{d}" for d in defines],
+           *[f"-I{i}" for i in includes]]
     if top:
         cmd.append(f"--top={top}")
     cmd += [str(f) for f in files]

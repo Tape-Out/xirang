@@ -72,7 +72,7 @@ DRIVERS = {"regs", "flat", "bsv", "assembly", "library", "foreign", "none"}
 
 # 黑盒声明认的键。黑盒不解析源码，这份声明就是它的全部形状。
 FOREIGN_KEYS = {"kind", "lang", "top", "rtl", "sim", "params", "defines",
-                "clock", "reset", "ports", "limits"}
+                "includes", "clock", "reset", "ports", "limits"}
 PORT_KEYS = {"endpoint", "kind", "role", "profile", "prefix", "type", "map"}
 EP_KINDS = {"transaction", "stream", "event", "physical"}
 
@@ -411,6 +411,15 @@ class Pkg:
                 if not isinstance(fs, list) or not fs:
                     raise Bad(f"{self.path}: foreign 的 {k} 是非空的文件列表")
                 for f in fs:
+                    if isinstance(f, dict):
+                        bad = set(f) - {"path", "when"}
+                        if bad or "path" not in f:
+                            raise Bad(f"{self.path}: foreign 的 {k} 条目只能写 path 与 when")
+                        for w in (f.get("when") or {}):
+                            if w not in self.knobs():
+                                raise Bad(f"{self.path}: foreign 的 {k} 里 "
+                                          f"when 用了不存在的旋钮 {w}")
+                        f = f["path"]
                     if not (self.root / f).is_file():
                         raise Bad(f"{self.path}: foreign 的 {k} 列了树上没有的 {f}")
             knobs = self.knobs()

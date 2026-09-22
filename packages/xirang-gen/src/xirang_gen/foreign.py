@@ -37,13 +37,65 @@ def defines(pkg: Pkg) -> list[str]:
     return list((e or {}).get("defines") or [])
 
 
-def files(pkg: Pkg, view: str = "rtl") -> list[pathlib.Path]:
-    """综合视图或仿真视图的文件，按包根解成绝对路径。"""
+def includes(pkg: Pkg) -> list[pathlib.Path]:
+    """`include 的搜索路径，按包根解成绝对路径。"""
+    e = pkg.foreign_emit()
+    return [pkg.root / d for d in (e or {}).get("includes") or []]
+
+
+def files(pkg: Pkg, view: str = "rtl", knobs=None) -> list[pathlib.Path]:
+    """综合视图或仿真视图的文件，按包根解成绝对路径。
+
+    条目可以写成 `{path: …, when: {旋钮: 值}}`：上游的某些源码只在某档配置下
+    才编得动。cv32e40p 的 fpnew 就是这样——它在常量函数里写 `$fatal`，yosys
+    直接拒绝，而那段只有 fpu=1 才走得到。`knobs` 不给就全要，用于还没解出配置
+    的场合（起草声明、核对端口）。
+    """
     e = pkg.foreign_emit()
     if e is None:
         raise Bad(f"{pkg.name} 不是黑盒包")
-    got = e.get(view) or e.get("rtl")
-    return [pkg.root / f for f in got]
+    out = []
+    for f in e.get(view) or e.get("rtl"):
+        if isinstance(f, dict):
+            if knobs is not None and any(knobs.get(k) != v
+                                         for k, v in (f.get("when") or {}).items()):
+                continue
+            f = f["path"]
+        out.append(pkg.root / f)
+    return out
+
+
+def knobs_of(vals) -> dict:
+    """解出来的旋钮摊成普通的名字到值，给 `when` 比对用。"""
+    return {k: getattr(v, "value", v) for k, v in vals.items()}
+
+
+def numeric(pkg: Pkg, vals) -> dict:
+    """给 yosys 的参数值：枚举档位换成数。
+
+    sv2v 翻完之后枚举名就不存在了，`chparam -set BaseIsa BaseIsaRV32I` 只会得到
+    「Can't decode value」。档位对应的数从 slang 的类型信息里取，写死一张表迟早
+    与上游对不上。
+    """
+    want = bake(pkg, vals)
+    if all(not isinstance(v, str) for v in want.values()):
+        return want
+    e = pkg.foreign_emit()
+    if not sv.available():
+        raise Bad(f"{pkg.name}: 有枚举档位的参数要装 pyslang 才展得成数"
+                  f"（pip install xirang[sv]）")
+    _, pars, _ = sv.elaborate(files(pkg, knobs=knobs_of(vals)), e["top"], {},
+                              defines(pkg), includes(pkg))
+    out = {}
+    for k, v in want.items():
+        if isinstance(v, str):
+            mem = dict((pars[k].enum if k in pars else ()) or ())
+            if v not in mem:
+                raise Bad(f"{pkg.name}: 参数 {k} 的档位 {v} 不在上游枚举里"
+                          f"（有 {sorted(mem) or '空'}）")
+            v = mem[v]
+        out[k] = v
+    return out
 
 
 def receipt(pkg: Pkg, vals) -> list[tuple[str, str]]:
@@ -60,8 +112,8 @@ def receipt(pkg: Pkg, vals) -> list[tuple[str, str]]:
         return [("XR-FGN-003", f"{pkg.name}：装 pyslang 才核对得了黑盒声明"
                                f"（pip install xirang[sv]）")]
     want = bake(pkg, vals)
-    got = sv.elaborate(files(pkg), e["top"],
-                       {k: str(v) for k, v in want.items()}, defines(pkg))
+    got = sv.elaborate(files(pkg, knobs=knobs_of(vals)), e["top"], want,
+                       defines(pkg), includes(pkg))
     ports, pars, errs = got
     out: list[tuple[str, str]] = []
     if errs:
@@ -258,8 +310,8 @@ def elaborates(pkg: Pkg, vals) -> list[str]:
     e = pkg.foreign_emit()
     if e is None or not sv.available():
         return []
-    got = sv.elaborate(files(pkg), e["top"],
-                       {k: str(v) for k, v in bake(pkg, vals).items()}, defines(pkg))
+    got = sv.elaborate(files(pkg, knobs=knobs_of(vals)), e["top"], bake(pkg, vals),
+                       defines(pkg), includes(pkg))
     if got is None:
         return []
     _, _, errs = got

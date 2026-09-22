@@ -191,6 +191,13 @@ def run(pkg: Pkg, index: dict[str, Pkg], *, out: pathlib.Path,
         # 再跑上游自己的测试，参数按这一点的取值覆盖进去
         if ups := pkg.upstream_tests():
             for u in ups:
+                # 上游的固件常常只对某几档有效：SERV 的 hello_uart.hex 是按 W=1
+                # 的时序编的，W=4 时串口波特率对不上，打出来是乱码。跳过要写出来，
+                # 不能让它在别的档上假装过了
+                if any(knobs.get(k) != v for k, v in (u.get("when") or {}).items()):
+                    notes.append(f"上游 {u['name']}：这一档不适用（要 "
+                                 + " ".join(f"{k}={v}" for k, v in u["when"].items()) + "）")
+                    continue
                 ran += 1
                 if u.get("params") or u.get("fixed"):
                     want = {p: knobs[k] for p, k in (u.get("params") or {}).items()

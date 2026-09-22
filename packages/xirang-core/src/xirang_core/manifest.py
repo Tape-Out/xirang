@@ -311,7 +311,7 @@ class Pkg:
     def _check_upstream(self):
         for t in self.upstream_tests():
             unknown = set(t) - {"name", "files", "dut", "params", "fixed",
-                                "plusargs", "expect", "timeout"}
+                                "plusargs", "expect", "timeout", "when"}
             if unknown:
                 raise Bad(f"{self.path}: test.upstream 有不认识的键 {sorted(unknown)}")
             for k in ("name", "files", "dut"):

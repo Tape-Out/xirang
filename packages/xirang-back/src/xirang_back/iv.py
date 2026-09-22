@@ -45,12 +45,16 @@ def run(files, dut: str, params: dict, work: pathlib.Path, name: str,
     cmd += [f"-P{dut}.{k}={v}" for k, v in sorted(params.items())]
     cmd += [str(f) for f in files]
     here = str(cwd) if cwd else None
-    r = subprocess.run(cmd, capture_output=True, text=True, cwd=here)
+    r = subprocess.run(cmd, capture_output=True, text=True,
+                       errors="replace", cwd=here)
     if r.returncode != 0:
         return False, (r.stderr or r.stdout)
     try:
+        # 上游测试台打的是原始串口字节，不都是合法 UTF-8。不给 errors 会让
+        # 整轮矩阵死在一个解码错误上，而那与被测的核毫无关系
         r = subprocess.run([need("vvp"), "-N", str(vvp_file), *plusargs],
-                           capture_output=True, text=True, timeout=secs, cwd=here)
+                           capture_output=True, text=True, errors="replace",
+                           timeout=secs, cwd=here)
     except subprocess.TimeoutExpired:
         return False, f"仿真跑了 {secs} 秒还没结束"
     out = (r.stdout or "") + (r.stderr or "")

@@ -222,3 +222,20 @@ def draft(files, top: str, clock: str = "clk", reset: str = "rst_n") -> str:
         P += ["  - endpoint: pins", "    kind: physical", "    type: 填个类型名",
               "    map:"] + [f"      {_camel(n)}: {n}" for n in loose]
     return chr(10).join(L + feats + P)
+
+
+def elaborates(pkg: Pkg, vals) -> list[str]:
+    """这一组参数展开得开吗。展不开就是这组取值非法，而清单没拦住它。
+
+    用 slang 而不是 yosys：矩阵有几十个点，slang 快一个量级，而这一步要的只是
+    「编得过」。真正要出网表时才轮到 yosys。
+    """
+    e = pkg.foreign_emit()
+    if e is None or not sv.available():
+        return []
+    got = sv.elaborate(files(pkg), e["top"],
+                       {k: str(v) for k, v in bake(pkg, vals).items()})
+    if got is None:
+        return []
+    _, _, errs = got
+    return [errs[0][:200]] if errs else []

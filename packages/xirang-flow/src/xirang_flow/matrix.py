@@ -181,7 +181,14 @@ def run(pkg: Pkg, index: dict[str, Pkg], *, out: pathlib.Path,
                             bad = True
                             notes.append(f"{f.stem}：" + tail(o))
 
-        # 黑盒：跑上游自己的测试，参数按这一点的取值覆盖进去
+        # 黑盒：先证明这一组参数展开得开——参数之间有依赖，某些组合上游本来就不支持
+        if pkg.foreign_emit():
+            ran += 1
+            for err in foreign.elaborates(pkg, vals):
+                bad = True
+                notes.append("展开：" + err)
+
+        # 再跑上游自己的测试，参数按这一点的取值覆盖进去
         if ups := pkg.upstream_tests():
             want = foreign.bake(pkg, vals)
             for u in ups:

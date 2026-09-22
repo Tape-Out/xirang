@@ -234,7 +234,8 @@ def _string_params(files, top: str) -> dict[str, str]:
     return out
 
 
-def draft(files, top: str, clock: str = "clk", reset: str = "rst_n") -> str:
+def draft(files, top: str, clock: str = "clk", reset: str = "rst_n",
+          defines=(), includes=()) -> str:
     """从别人的 RTL 出一份声明草稿：全部参数、按前缀归好的端点。
 
     草稿是起点不是终点——端点的 kind 与 role 要人去判，profile 要人去认。
@@ -243,7 +244,7 @@ def draft(files, top: str, clock: str = "clk", reset: str = "rst_n") -> str:
     from xirang_back import sv
     if not sv.available():
         raise Bad("出草稿要 pyslang：pip install xirang[sv]")
-    got = sv.elaborate(files, top, {})
+    got = sv.elaborate(files, top, {}, defines, includes)
     if got is None:
         raise Bad("出草稿要 pyslang")
     ports, pars, errs = got

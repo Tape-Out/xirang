@@ -71,3 +71,26 @@ def test_an_unterminated_region_runs_to_the_end(tmp_path):
     got, _ = strip_sim([f], tmp_path / "work")
     txt = got[0].read_text(encoding="utf-8")
     assert "never_closed" not in txt and "endmodule" not in txt
+
+
+def test_preprocessor_directives_survive(tmp_path):
+    """区段里常套着条件编译。连指令一起抹会把边界搞错——CVA6 那段抹完 sv2v 吐了 505 MB。"""
+    src = [
+        "module m;",
+        "  // pragma translate_off",
+        "`ifndef VERILATOR",
+        "  int f; initial f = $fopen(\"x\");",
+        "`else",
+        "  initial begin string fn; end",
+        "`endif",
+        "  // pragma translate_on",
+        "  assign y = a;",
+        "endmodule",
+    ]
+    f = w(tmp_path / "in", "m.sv", src)
+    got, cut = strip_sim([f], tmp_path / "work")
+    lines = got[0].read_text(encoding="utf-8").splitlines()
+    assert cut == 1 and len(lines) == len(src)
+    kept = [x for x in lines if x.strip()]
+    assert kept == ["module m;", "`ifndef VERILATOR", "`else", "`endif",
+                    "  assign y = a;", "endmodule"], kept

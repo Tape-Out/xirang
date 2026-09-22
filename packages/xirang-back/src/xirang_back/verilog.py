@@ -74,7 +74,7 @@ def elaborate(files, top: str, params: dict, out: pathlib.Path,
         files = [to_v2005(files, out.with_suffix(".sv2v.v"), top, defines, includes)]
         defines = includes = ()   # 宏与 include 在翻译那一步就处理掉了
         here = out.parent
-    # yosys 把源文件路径写进函数局部线的名字（`$func$<路径>:<行>$<序号>`），
+    # yosys 把源文件路径写进函数局部线的名字（`\f$func$<路径>:<行>$<序号>`），
     # 绝对路径于是漏进产物：同一份配置换个输出目录就生成不同的 Verilog，摘要对不上。
     # 在一个固定的基准目录下跑，只递相对路径，产物才跟目录无关
     rel = _under(files, here)
@@ -118,6 +118,7 @@ def schematic(files, top: str, params: dict, out: pathlib.Path,
 
 
 SIM_OFF = re.compile(r"//\s*(?:synopsys|synthesis|pragma)\s+translate_off(?![A-Za-z0-9_])")
+DIRECTIVE = re.compile(r"\s*`(?:ifdef|ifndef|elsif|else|endif|define|undef)(?![A-Za-z0-9_])")
 SIM_ON = re.compile(r"//\s*(?:synopsys|synthesis|pragma)\s+translate_on(?![A-Za-z0-9_])")
 
 
@@ -144,7 +145,9 @@ def strip_sim(files, work: pathlib.Path) -> tuple[list[pathlib.Path], int]:
             if not off and SIM_OFF.search(line):
                 off, cut = True, cut + 1
             if off:
-                keep.append("")
+                # 预处理指令要留着：区段里常套着 `ifdef/`else/`endif，连它们一起抹
+                # 会把条件编译的边界搞错——CVA6 那段抹完，sv2v 吐出 505 MB
+                keep.append(line if DIRECTIVE.match(line) else "")
                 if SIM_ON.search(line):
                     off = False
             else:

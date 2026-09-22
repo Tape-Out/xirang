@@ -86,7 +86,7 @@ TOP_KEYS = {*DIR_KEYS,
             "name", "version", "spec", "kind", "lang", "identity", "contract",
             "params", "features", "constraints", "area", "emit", "deps",
             "bus", "instances", "connect", "pipe", "test", "diagnostics",
-            "targets", "__path__"}
+            "targets", "tasks", "__path__"}
 
 
 def slow_ctrl(emit: dict, vals) -> bool:

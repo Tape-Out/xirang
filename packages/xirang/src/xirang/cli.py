@@ -245,6 +245,29 @@ def cmd_diffsigs(args) -> int:
     return 0
 
 
+def cmd_run(args) -> int:
+    """跑清单里写的任务。**它不是隐藏的构建步骤**——`build` 不会替你跑。"""
+    from xirang_flow import tasks
+    _, _, idx = find.open_(args.path)
+    pk = idx.get(args.top)
+    if pk is None:
+        raise Bad(f"搜索路径上没有包 {args.top}")
+    got = tasks.all_of(pk)
+    if args.list or not args.task:
+        if not got:
+            print(f"{pk.name} 没有写任务")
+            return 0
+        rows = [(n, " ".join(t.get("needs") or []) or "—",
+                 (t.get("desc") or t["run"])[:60]) for n, t in sorted(got.items())]
+        print(view.table(("任务", "先要", "做什么"), rows))
+        return 0
+    vals = resolve_pkg(pk, {}, f"{pk.path} (default)", None, _sets(args, pk))
+    out = pathlib.Path(args.out or (pk.root / "build"))
+    for name, how in tasks.run(pk, args.task, vals, out, dry=args.plan):
+        print(f"  {name:16} {how}")
+    return 0
+
+
 def cmd_show(args) -> int:
     """一个包的详情。`list` 先看得见，`show` 才看得清。"""
     _, _, idx = find.open_(args.path)
@@ -671,6 +694,15 @@ def main(argv=None) -> int:
     ls = sub.add_parser("list", help="搜索路径上有哪些包")
     ls.add_argument("-k", "--kind", choices=["ip", "lib", "asm"])
     ls.set_defaults(fn=cmd_list)
+
+    rn = sub.add_parser("run", help="跑清单里写的任务。build 不会替你跑它们")
+    rn.add_argument("top")
+    rn.add_argument("task", nargs="?", help="任务名，省略则列出全部")
+    rn.add_argument("-s", "--set", action="append", help="覆盖旋钮")
+    rn.add_argument("-o", "--out")
+    rn.add_argument("--plan", action="store_true", help="只打印要跑什么，不跑")
+    rn.add_argument("--list", action="store_true", help="列出全部任务")
+    rn.set_defaults(fn=cmd_run)
 
     ds = sub.add_parser("diffsigs", help="价目表摘要失效时，说清是哪一部分变了")
     ds.add_argument("top")

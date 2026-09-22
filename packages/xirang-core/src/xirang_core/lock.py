@@ -11,6 +11,7 @@
 """
 import hashlib
 import pathlib
+import subprocess
 import re
 
 import yaml
@@ -101,7 +102,54 @@ def check_submodules(root: pathlib.Path, resolved: dict[str, Pkg]) -> list[str]:
     return bad
 
 
-def resolve_deps(top: Pkg, index: dict[str, Pkg]) -> dict[str, Pkg]:
+def _git(root: pathlib.Path, rev: str) -> str | None:
+    """检出里 rev 指的那个提交。不是 git 仓或解不出就返回 None。"""
+    r = subprocess.run(["git", "-C", str(root), "rev-parse", f"{rev}^{{commit}}"],
+                       capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def locate(by: Pkg, name: str, spec: dict, index: dict[str, Pkg]) -> Pkg:
+    """依赖从哪来。
+
+    从前这里只按名字在搜索路径上扫，`path:` 与 `git:` 写了也没人读——清单说得出
+    「这个依赖来自哪」，工具却做不到，两边各说各的。现在来源真的用于定位：写了
+    `path:` 的依赖不必在搜索路径上也找得到，写了 `git:` 的要核对检出停在哪个提交。
+
+    本版不联网取：`git:` 认的是本机已有的检出。取不取得到是另一件事，**核对得对不对
+    是这一件**。
+    """
+    if p := spec.get("path"):
+        root = (by.root / p).resolve()
+        if not (root / "ip.yaml").is_file():
+            raise Bad(f"XR-DEP-001 {by.name} 的依赖 {name}：path 指向 {root}，"
+                      f"那里没有 ip.yaml")
+        got = Pkg(root)
+        if got.name != name:
+            raise Bad(f"XR-DEP-002 {by.name} 的依赖 {name}：path 指向的包叫 "
+                      f"{got.name}，不是 {name}")
+        return got
+    if url := spec.get("git"):
+        got = index.get(name)
+        if got is None:
+            raise Bad(f"XR-DEP-003 {by.name} 的依赖 {name} 声明了 git: {url}，"
+                      f"但本机没有它的检出。本版不联网取，先克隆到搜索路径上")
+        want, head = _git(got.root, spec["rev"]), _git(got.root, "HEAD")
+        if want is None:
+            raise Bad(f"XR-DEP-004 {by.name} 的依赖 {name}：{got.root} 里解不出 "
+                      f"rev {spec['rev']}")
+        if want != head:
+            raise Bad(f"XR-DEP-004 {by.name} 的依赖 {name}：声明 rev {spec['rev']}"
+                      f"（{want[:12]}），检出停在 {head[:12]}")
+        return got
+    got = index.get(name)
+    if got is None:
+        raise Bad(f"{by.name} 需要 {name}，但搜索路径里没有这个包")
+    return got
+
+
+def resolve_deps(top: Pkg, index: dict[str, Pkg],
+                 sources: dict | None = None) -> dict[str, Pkg]:
     """从顶层走一遍依赖图。
 
     依赖有两种来路：`deps` 声明的，和 `instances` 例化的。**两种都要走同一条
@@ -114,10 +162,10 @@ def resolve_deps(top: Pkg, index: dict[str, Pkg]) -> dict[str, Pkg]:
     seen_req: dict[str, tuple[str, str]] = {}
     stack = [top]
 
-    def want(by: Pkg, name: str, req: str):
-        got = index.get(name)
-        if got is None:
-            raise Bad(f"{by.name} 需要 {name}，但搜索路径里没有这个包")
+    def want(by: Pkg, name: str, req: str, spec: dict | None = None):
+        got = locate(by, name, spec or {}, index)
+        if sources is not None and name not in sources:
+            sources[name] = dict(spec or {})
         if not satisfies(got.ip["version"], req):
             raise Bad(f"{by.name} 要 {name} {req}，但找到的是 {got.ip['version']}")
         if name in seen_req:
@@ -133,20 +181,30 @@ def resolve_deps(top: Pkg, index: dict[str, Pkg]) -> dict[str, Pkg]:
     while stack:
         cur = stack.pop()
         for name, spec in _sources(cur).items():
-            want(cur, name, spec.get("req") or spec.get("version") or "*")
+            want(cur, name, spec.get("req") or spec.get("version") or "*", spec)
         for inst in cur.ip.get("instances", []) or []:
             want(cur, inst["of"], "*")      # 例化不带版本区间，但一样要存在
     return out
 
 
-def make_lock(top: Pkg, resolved: dict[str, Pkg], root: pathlib.Path) -> dict:
+def make_lock(top: Pkg, resolved: dict[str, Pkg], root: pathlib.Path,
+              sources: dict | None = None) -> dict:
+    """锁里记的来源要与清单声明的一致。
+
+    从前一律记成路径，于是一个 `git:` 依赖锁完看不出它本来是按提交钉住的——
+    照着锁重建的人拿到的是「某台机器上的某个目录」。
+    """
     pkgs = []
     for name in sorted(resolved):
         p = resolved[name]
-        try:
-            src = {"path": str(p.root.relative_to(root))}
-        except ValueError:
-            src = {"path": str(p.root)}
+        spec = (sources or {}).get(name) or {}
+        if spec.get("git"):
+            src = {"git": spec["git"], "rev": spec["rev"]}
+        else:
+            try:
+                src = {"path": str(p.root.relative_to(root))}
+            except ValueError:
+                src = {"path": str(p.root)}
         pkgs.append({"name": name, "version": p.ip["version"],
                      "kind": p.kind, "source": src, "digest": digest(p)})
     return {"xirang-lock": LOCK_VERSION, "top": top.name, "packages": pkgs}

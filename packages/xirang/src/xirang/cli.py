@@ -146,9 +146,10 @@ def cmd_lock(args) -> int:
     search = find.roots(args.path)
     index = find.index(search)
     top = _top_pkg(args, index)
-    resolved = resolve_deps(top, index)
+    srcs: dict = {}
+    resolved = resolve_deps(top, index, srcs)
     root = search[0]
-    lock = make_lock(top, resolved, root)
+    lock = make_lock(top, resolved, root, srcs)
     # 锁跟着装配走，不是跟着工作区走：装配是交付物，锁是它的一部分
     out = pathlib.Path(args.out or (top.root / "xirang.lock"))
     write_lock(lock, out)

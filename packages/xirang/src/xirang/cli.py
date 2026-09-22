@@ -9,7 +9,8 @@ import sys
 
 import yaml
 
-from xirang_back import tools
+from xirang_gen import foreign
+from xirang_back import tools, verilog
 from xirang_core import diag
 from xirang_core.manifest import GEN_HW, GEN_SW
 from xirang_area import check as area_check
@@ -278,14 +279,29 @@ def cmd_wrap(args) -> int:
         raise Bad(f"{args.top} 是装配，它本身就是顶层，不需要 wrap")
     if pkg.is_library:
         raise Bad(f"{args.top} 是库包，不会被例化，也就没有端口")
-    if flat_emit(pkg) is None:
-        raise Bad(f"{args.top} 的 emit 里没有 verilog-flat——"
-                  f"想要独立可流片就把它加上，并选一种 bus")
 
     cli = {}
     for kv in args.set or []:
         k, _, v = kv.partition("=")
         cli[k] = yaml.safe_load(v)
+
+    # 黑盒：源码是别人的，我们不生成顶层，只把参数按解出来的配置展开掉。
+    # ecc 与 yosys-sta 不接受从外面传参数，不展开就等于拿上游默认值去量面积。
+    if (fe := pkg.foreign_emit()) is not None:
+        vals = resolve_pkg(pkg, {}, f"{pkg.path} (default)", None, cli)
+        out = pathlib.Path(args.out or (pkg.root / "wrap"))
+        got = verilog.elaborate(foreign.files(pkg), fe["top"],
+                                foreign.bake(pkg, vals),
+                                out / f"{fe['top']}.v")
+        print(f"{got}")
+        baked = ", ".join(f"{k}={v}" for k, v in sorted(foreign.bake(pkg, vals).items()))
+        print(f"  {DIM}{fe['top']}  参数已展开：{baked}{OFF}")
+        return 0
+
+    if flat_emit(pkg) is None:
+        raise Bad(f"{args.top} 的 emit 里没有 verilog-flat——"
+                  f"想要独立可流片就把它加上，并选一种 bus")
+
     vals = resolve_pkg(pkg, {}, f"{pkg.path} (default)", None, cli)
 
     out = pathlib.Path(args.out or (pkg.root / "wrap"))

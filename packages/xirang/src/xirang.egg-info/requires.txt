@@ -6,3 +6,12 @@ xirang-out
 xirang-ws
 xirang-flow
 pyyaml
+
+[fpga]
+yowasp-nextpnr-ice40
+
+[sv]
+pyslang
+
+[yosys]
+yowasp-yosys

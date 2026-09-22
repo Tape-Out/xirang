@@ -11,11 +11,13 @@ import subprocess
 import sys
 
 from xirang_area.check import flat_param, noprice, uncosted, unmeasured
+from xirang_back import iv
 from xirang_back.sim import schedule, sim
 from xirang_core import diag
 from xirang_core.manifest import GEN_HW, GEN_SW, GEN_TEST, Bad, Pkg
 from xirang_core.matrix import points
 from xirang_core.resolve import resolve_pkg
+from xirang_gen import foreign
 from xirang_gen.check import dead_inputs, no_overlap, unused_methods
 from xirang_gen.regmap import generate as gen_regmap
 from xirang_gen.tb import regs_tb
@@ -94,6 +96,11 @@ def run(pkg: Pkg, index: dict[str, Pkg], *, out: pathlib.Path,
 
     rep = Matrix(name=pkg.name)
     found = [(c, m) for c, fn in CHECKS for m in fn(pkg)]
+    # 黑盒：拿展开之后的端口表回来核对声明。参数投影没生效是静默的，
+    # 后端会照上游默认值去量，面积与时序量的是另一颗核
+    if pkg.foreign_emit():
+        found += foreign.receipt(
+            pkg, resolve_pkg(pkg, {}, f"{pkg.path} (default)", None, {}))
     if pkg.regmap:
         found += [("XR-REG-001", m)
                   for m in unused_methods(pkg, out / GEN_HW / f"{cap}Regs.bsv")]
@@ -173,6 +180,17 @@ def run(pkg: Pkg, index: dict[str, Pkg], *, out: pathlib.Path,
                         if not ok:
                             bad = True
                             notes.append(f"{f.stem}：" + tail(o))
+
+        # 黑盒：跑上游自己的测试，参数按这一点的取值覆盖进去
+        if ups := pkg.upstream_tests():
+            want = foreign.bake(pkg, vals)
+            for u in ups:
+                ran += 1
+                ok, o = iv.run([pkg.root / f for f in u["files"]], u["dut"],
+                               want, work / "up", f"{u['name']}{lbl}")
+                if not ok:
+                    bad = True
+                    notes.append(f"上游 {u['name']}：" + tail(o))
 
         if not ran:
             # 什么都没跑却报绿，比报红还糟——那是在骗人

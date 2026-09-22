@@ -21,7 +21,7 @@ import itertools
 from .manifest import Bad, Pkg
 
 MODES = ("auto", "full", "none")
-TEST_KEYS = {"matrix", "extra", "skip", "unused", "noarea", "deadread"}
+TEST_KEYS = {"matrix", "extra", "skip", "unused", "noarea", "deadread", "upstream"}
 FULL_CAP = 64
 
 

@@ -272,6 +272,7 @@ class Pkg:
         # 黑盒声明与构建目标没人主动去读就等于没写，所以在这里查
         self.foreign_emit()
         self._check_targets()
+        self._check_upstream()
 
         # 检查号与级别写错了要当场报：写错一个号，那道门禁的覆盖就静默失效
         for code, lv in (ip.get("diagnostics") or {}).items():
@@ -296,6 +297,23 @@ class Pkg:
             for k in ("aw", "dw"):
                 if k in c and k in ic and c[k] != ic[k]:
                     raise Bad(f"regmap 与 ip.yaml 的 contract.{k} 不一致：{c[k]} vs {ic[k]}")
+
+    def upstream_tests(self) -> list[dict]:
+        """上游自带的测试台。接别人的核，最有说服力的是它自己的测试还过。"""
+        return list((self.ip.get("test") or {}).get("upstream") or [])
+
+    def _check_upstream(self):
+        for t in self.upstream_tests():
+            unknown = set(t) - {"name", "files", "dut"}
+            if unknown:
+                raise Bad(f"{self.path}: test.upstream 有不认识的键 {sorted(unknown)}")
+            for k in ("name", "files", "dut"):
+                if not t.get(k):
+                    raise Bad(f"{self.path}: test.upstream 的每一项都要写 {k}")
+            for f in t["files"]:
+                if not (self.root / f).is_file():
+                    raise Bad(f"{self.path}: test.upstream {t['name']} "
+                              f"列了树上没有的 {f}")
 
     def targets(self) -> dict[str, dict]:
         """怎么构建这个包。清单没写就按今天的规则推断。

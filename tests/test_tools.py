@@ -14,6 +14,7 @@ import sys
 from types import SimpleNamespace
 
 from xirang_back import tools
+from xirang_back.iv import _short
 from xirang_back.verilog import script
 from xirang_core.manifest import Bad
 from xirang_gen.foreign import bake
@@ -64,6 +65,17 @@ def main() -> int:
     if "proc" not in sc:
         bad.append("没有 proc")
 
+    # 矩阵点的标签是把旋钮名串起来的。picorv32 有 25 个旋钮，全开那一点的标签
+    # 三百多字符，直接当文件名会撞上 255 字节的上限——而 iverilog 报出来的是
+    # 「文件名过长」，看着像上游的核有问题
+    long = "".join(f"Knob{i}On" for i in range(40))
+    if len(_short(long)) > 48:
+        bad.append(f"长标签没截短：{len(_short(long))} 字符")
+    if _short("Default") != "Default":
+        bad.append("短标签不该被动")
+    if _short(long) == _short(long + "x"):
+        bad.append("截短之后两个不同的点撞名了")
+
     # 参数投影：布尔按 1/0，字面值照用
     got = bake(PKG, {"enableMul": val(True), "progaddrReset": val(0x10000)})
     if got != {"ENABLE_MUL": 1, "PROGADDR_RESET": 65536, "FIFO": 8}:
@@ -77,7 +89,7 @@ def main() -> int:
     for line in bad:
         print(f"✘ {line}")
     if not bad:
-        print(f"✔ {len(rows)} 样工具各有用途；展开脚本的次序对；参数投影对，漏一个就报")
+        print(f"✔ {len(rows)} 样工具各有用途；展开脚本的次序对；长标签截得住；参数投影对，漏一个就报")
     return 1 if bad else 0
 
 

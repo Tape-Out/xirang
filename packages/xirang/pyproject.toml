@@ -9,6 +9,14 @@ description = "XiRang xirang"
 requires-python = ">=3.14"
 dependencies = ['xirang-core', 'xirang-gen', 'xirang-area', 'xirang-back', 'xirang-out', 'xirang-ws', 'xirang-flow', 'pyyaml']
 
+# 外部工具一律系统装的优先。装不上的人可以让 pip 带一份兜底：
+#   pip install xirang[yosys]
+# 找工具时先 which，再找 yowasp-* 那份，所以两者共存也不会打架。
+[project.optional-dependencies]
+yosys = ["yowasp-yosys"]
+fpga = ["yowasp-nextpnr-ice40"]
+sv = ["pyslang"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

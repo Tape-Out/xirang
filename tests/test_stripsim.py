@@ -38,7 +38,7 @@ def test_the_region_goes_and_the_line_numbers_stay(tmp_path):
         "endmodule",
     ]
     f = w(tmp_path / "in", "m.sv", src)
-    got, cut = strip_sim([f], tmp_path / "work")
+    got, cut, _ = strip_sim([f], tmp_path / "work")
     assert cut == 1
     lines = got[0].read_text(encoding="utf-8").splitlines()
     assert len(lines) == len(src), "行数变了，报错的行号就指不回源文件"
@@ -49,7 +49,7 @@ def test_the_region_goes_and_the_line_numbers_stay(tmp_path):
 
 def test_a_file_without_the_pragma_is_passed_through(tmp_path):
     f = w(tmp_path / "in", "n.sv", ["module n; endmodule"])
-    got, cut = strip_sim([f], tmp_path / "work")
+    got, cut, _ = strip_sim([f], tmp_path / "work")
     assert cut == 0 and got == [f], "没有 pragma 就不该复制一份"
 
 
@@ -58,8 +58,9 @@ def test_two_files_with_the_same_name_do_not_collide(tmp_path):
                                          "  bad_a", "  // pragma translate_on", "endmodule"])
     b = w(tmp_path / "y", "fifo_v3.sv", ["module b;", "  // pragma translate_off",
                                          "  bad_b", "  // pragma translate_on", "endmodule"])
-    got, cut = strip_sim([a, b], tmp_path / "work")
+    got, cut, _ = strip_sim([a, b], tmp_path / "work")
     assert cut == 2 and len({str(p) for p in got}) == 2
+    assert got[0].parent != got[1].parent, "同名文件要分在各自的目录里"
     txt = [p.read_text(encoding="utf-8") for p in got]
     assert "module a;" in txt[0] and "module b;" in txt[1]
     assert "bad_a" not in txt[0] and "bad_b" not in txt[1]
@@ -68,7 +69,7 @@ def test_two_files_with_the_same_name_do_not_collide(tmp_path):
 def test_an_unterminated_region_runs_to_the_end(tmp_path):
     f = w(tmp_path / "in", "u.sv", ["module u;", "  // pragma translate_off",
                                     "  never_closed", "endmodule"])
-    got, _ = strip_sim([f], tmp_path / "work")
+    got, _, _x = strip_sim([f], tmp_path / "work")
     txt = got[0].read_text(encoding="utf-8")
     assert "never_closed" not in txt and "endmodule" not in txt
 
@@ -88,7 +89,7 @@ def test_preprocessor_directives_survive(tmp_path):
         "endmodule",
     ]
     f = w(tmp_path / "in", "m.sv", src)
-    got, cut = strip_sim([f], tmp_path / "work")
+    got, cut, _ = strip_sim([f], tmp_path / "work")
     lines = got[0].read_text(encoding="utf-8").splitlines()
     assert cut == 1 and len(lines) == len(src)
     kept = [x for x in lines if x.strip()]

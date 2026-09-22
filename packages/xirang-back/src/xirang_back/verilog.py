@@ -56,8 +56,8 @@ def script(files, top: str, params: dict, out: pathlib.Path,
 
 
 def elaborate(files, top: str, params: dict, out: pathlib.Path,
-              defines=(), includes=(), root: pathlib.Path | None = None
-              ) -> pathlib.Path:
+              defines=(), includes=(), root: pathlib.Path | None = None,
+              secs: int = 1800) -> pathlib.Path:
     """写出展开后的 Verilog，返回它的路径。
 
     yosys 读不动 SystemVerilog 的包与结构（`package` 一行就是 syntax error），
@@ -68,21 +68,26 @@ def elaborate(files, top: str, params: dict, out: pathlib.Path,
     files = list(files)
     here = root
     if any(str(f).endswith(".sv") for f in files):
-        files, cut = strip_sim(files, out.parent / "_synth")
+        files, cut, extra = strip_sim(files, out.parent / "_synth")
         if cut:
             print(f"  抹掉 {cut} 段 translate_off（上游标明不进综合）")
-        files = [to_v2005(files, out.with_suffix(".sv2v.v"), top, defines, includes)]
+        includes = list(includes) + extra
+        files = [to_v2005(files, out.with_suffix(".sv2v.v"), top, defines,
+                          includes, secs // 2)]
         defines = includes = ()   # 宏与 include 在翻译那一步就处理掉了
         here = out.parent
     # yosys 把源文件路径写进函数局部线的名字（`\f$func$<路径>:<行>$<序号>`），
     # 绝对路径于是漏进产物：同一份配置换个输出目录就生成不同的 Verilog，摘要对不上。
     # 在一个固定的基准目录下跑，只递相对路径，产物才跟目录无关
     rel = _under(files, here)
-    r = subprocess.run([need("yosys"), "-q", "-p",
-                        script(rel, top, params, out.resolve(),
-                               defines, _under(includes, here))],
-                       capture_output=True, text=True,
-                       cwd=str(here) if here else None)
+    try:
+        r = subprocess.run([need("yosys"), "-q", "-p",
+                            script(rel, top, params, out.resolve(),
+                                   defines, _under(includes, here))],
+                           capture_output=True, text=True, timeout=secs,
+                           cwd=str(here) if here else None)
+    except subprocess.TimeoutExpired:
+        raise ToolError(f"yosys 展开 {top} 超过 {secs} 秒还没结束") from None
     if r.returncode != 0 or not out.is_file():
         tail = "\n".join((r.stderr or r.stdout).splitlines()[-12:])
         raise ToolError(f"展开 {top} 失败：\n{tail}")
@@ -122,7 +127,7 @@ DIRECTIVE = re.compile(r"\s*`(?:ifdef|ifndef|elsif|else|endif|define|undef)(?![A
 SIM_ON = re.compile(r"//\s*(?:synopsys|synthesis|pragma)\s+translate_on(?![A-Za-z0-9_])")
 
 
-def strip_sim(files, work: pathlib.Path) -> tuple[list[pathlib.Path], int]:
+def strip_sim(files, work: pathlib.Path):
     """抹掉 `translate_off` 与 `translate_on` 之间的代码，行号照旧。
 
     这对 pragma 是上游明写的「这一段不进综合」。商用综合器认它，sv2v 不认——
@@ -133,7 +138,7 @@ def strip_sim(files, work: pathlib.Path) -> tuple[list[pathlib.Path], int]:
     抹掉的行换成空行，报错里的行号才还对得上源文件。
     """
     work.mkdir(parents=True, exist_ok=True)
-    out, cut = [], 0
+    out, cut, extra = [], 0, set()
     for f in files:
         f = pathlib.Path(f)
         txt = f.read_text(encoding="utf-8", errors="replace")
@@ -152,16 +157,19 @@ def strip_sim(files, work: pathlib.Path) -> tuple[list[pathlib.Path], int]:
                     off = False
             else:
                 keep.append(line)
-        # 同名会撞（vendor 里好几个 fifo_v3.sv），按来源路径造唯一名
-        tag = str(f).strip("/").replace("/", "_").replace("\\", "_")
-        dst = work / tag
+        # 副本要保住原来的目录层次：`include 先在**包含它的文件所在目录**里找，
+        # 摊平到一个目录会让同名的 .svh 解析到别的那一份——CVA6 上的表现是
+        # sv2v 吐出 505 MB。同时把原目录挂进搜索路径，同级包含照旧找得到
+        dst = work / str(f.resolve()).strip("/")
+        dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_text(chr(10).join(keep) + chr(10), encoding="utf-8")
         out.append(dst)
-    return out, cut
+        extra.add(f.parent)
+    return out, cut, sorted(extra)
 
 
 def to_v2005(files, out: pathlib.Path, top: str | None = None,
-             defines=(), includes=()) -> pathlib.Path:
+             defines=(), includes=(), secs: int = 900) -> pathlib.Path:
     """SystemVerilog 翻成 Verilog-2005。
 
     **它不展开参数**——实测 `--top` 只删没被例化的模块，`parameter` 原样保留。
@@ -173,7 +181,13 @@ def to_v2005(files, out: pathlib.Path, top: str | None = None,
     if top:
         cmd.append(f"--top={top}")
     cmd += [str(f) for f in files]
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=secs)
+    except subprocess.TimeoutExpired:
+        raise ToolError(
+            f"sv2v 翻译 {top or '这份设计'} 超过 {secs} 秒还没结束。"
+            f"它在某些设计上会指数膨胀（CVA6 上四分钟涨到 6 GB），"
+            f"不是慢而是跑飞了") from None
     if r.returncode != 0:
         raise ToolError("sv2v 翻译失败：" + _tail(r))
     out.write_text(r.stdout, encoding="utf-8")

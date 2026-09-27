@@ -92,3 +92,40 @@ def test_the_same_projection_feeds_the_upstream_generator(tmp_path):
     assert hole["defines"] == "-DVX_CFG_NUM_CORES=4 -DVX_CFG_XLEN=32"
     got = tasks.fill("gen --cflags=\"{{defines}}\"", hole, "setup")
     assert got == 'gen --cflags="-DVX_CFG_NUM_CORES=4 -DVX_CFG_XLEN=32"'
+
+
+FPU = {"fpu": {"type": "choice", "values": ["STD", "DPI"], "default": "STD"},
+       "tcu": {"type": "choice", "values": ["TFR", "DSP", "BHF"], "default": "TFR"}}
+
+
+def test_a_select_macro_carries_the_level_in_its_name(tmp_path):
+    """RTL 按 `ifdef VX_CFG_FPU_TYPE_DPI 选实现，只给值宏选不中。"""
+    pk = mk(tmp_path, {"VX_CFG_FPU_TYPE": "fpu", "VX_CFG_FPU_TYPE_{{fpu}}": True},
+            knobs=FPU)
+    assert foreign.defines(pk, {"fpu": V("DPI")}) == ["VX_CFG_FPU_TYPE=DPI",
+                                                      "VX_CFG_FPU_TYPE_DPI"]
+
+
+def test_a_map_gives_each_level_its_value_and_null_leaves_it_out(tmp_path):
+    m = {"VX_CFG_TCU": {"from": "tcu", "map": {"TFR": "tfr", "DSP": "dsp", "BHF": None}}}
+    pk = mk(tmp_path, m, knobs=FPU)
+    assert foreign.defines(pk, {"tcu": V("DSP")}) == ["VX_CFG_TCU=dsp"]
+    assert foreign.defines(pk, {"tcu": V("BHF")}) == []
+
+
+def test_a_map_missing_a_level_is_refused(tmp_path):
+    m = {"VX_CFG_TCU": {"from": "tcu", "map": {"TFR": "tfr"}}}
+    with pytest.raises(Bad, match=r"XR-MACRO-002.*DSP"):
+        mk(tmp_path, m, knobs=FPU).foreign_emit()
+
+
+def test_a_placeholder_must_name_a_choice_knob(tmp_path):
+    with pytest.raises(Bad, match="XR-MACRO-001"):
+        mk(tmp_path, {"N_{{cores}}": True}).foreign_emit()
+    with pytest.raises(Bad, match="XR-MACRO-001.*不存在"):
+        mk(tmp_path, {"N_{{nope}}": True}, knobs=FPU).foreign_emit()
+
+
+def test_a_switch_macro_needs_a_boolean_knob(tmp_path):
+    with pytest.raises(Bad, match="不是布尔旋钮"):
+        mk(tmp_path, {"VX_CFG_L2_ENABLE": {"when": "cores"}}).foreign_emit()

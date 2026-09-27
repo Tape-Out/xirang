@@ -72,8 +72,12 @@ GEN_TEST = "htest"
 DRIVERS = {"regs", "flat", "bsv", "assembly", "library", "foreign", "none"}
 
 # 黑盒声明认的键。黑盒不解析源码，这份声明就是它的全部形状。
-FOREIGN_KEYS = {"kind", "lang", "top", "rtl", "sim", "params", "defines",
-                "includes", "setup", "generate", "clock", "reset", "ports", "limits"}
+FOREIGN_KEYS = {"kind", "lang", "top", "rtl", "sim", "views", "params", "defines",
+                "includes", "setup", "generate", "clock", "reset", "ports", "limits",
+                "receipt"}
+VIEW_KEYS = {"rtl", "defines", "includes", "replace"}
+EXPECT = {"eq", "ne", "ge", "le", "in"}
+PH = re.compile(r"\{\{\s*(\w+)\s*\}\}")
 PORT_KEYS = {"endpoint", "kind", "role", "profile", "prefix", "type", "map"}
 EP_KINDS = {"transaction", "stream", "event", "physical"}
 
@@ -452,32 +456,35 @@ class Pkg:
                 raise Bad(f"{self.path}: foreign 的 lang={e['lang']} 不认识")
             # generate 的产物由息壤自己写出来，落盘之前它当然不在树上
             made = {g.get("out") for g in (e.get("generate") or [])}
+            views = e.get("views") or {}
+            if not isinstance(views, dict):
+                raise Bad(f"{self.path}: foreign 的 views 要写成「视图: 覆盖」的表")
+            if bad := sorted(set(views) - {"sim", "syn"}):
+                raise Bad(f"XR-VIEW-001 {self.path}: 视图 {bad} 不认识。视图只有 rtl、sim、syn，"
+                          f"rtl 是基础，直接写在 foreign 段上")
             for k in ("rtl", "sim"):
-                fs = e.get(k)
-                if fs is None:
-                    continue
-                if not isinstance(fs, list) or not fs:
-                    raise Bad(f"{self.path}: foreign 的 {k} 是非空的文件列表")
-                for f in fs:
-                    if isinstance(f, dict):
-                        bad = set(f) - {"path", "when"}
-                        if bad or "path" not in f:
-                            raise Bad(f"{self.path}: foreign 的 {k} 条目只能写 path 与 when")
-                        for w in (f.get("when") or {}):
-                            if w not in self.knobs():
-                                raise Bad(f"{self.path}: foreign 的 {k} 里 "
-                                          f"when 用了不存在的旋钮 {w}")
-                        f = f["path"]
-                    if f in made:
-                        continue
-                    if not (self.root / f).is_file():
-                        # 生成器类的上游：RTL 要先跑一遍对方的脚本才存在。
-                        # 报「树上没有」等于把人晾在那里，要说清先跑什么
-                        hint = ""
-                        if setup := e.get("setup"):
-                            hint = (f"——它是生成物，先跑 "
-                                    f"`ran run {self.name} {setup}`")
-                        raise Bad(f"{self.path}: foreign 的 {k} 列了树上没有的 {f}{hint}")
+                if e.get(k) is not None:
+                    self._srcs(e, e[k], k, made, need=True)
+            for v, ov in views.items():
+                if bad := sorted(set(ov) - VIEW_KEYS):
+                    raise Bad(f"{self.path}: 视图 {v} 不认 {bad}，只有 {sorted(VIEW_KEYS)}")
+                if bad := sorted(set(ov.get("replace") or []) - (VIEW_KEYS - {"replace"})):
+                    raise Bad(f"{self.path}: 视图 {v} 的 replace 只能列 rtl、defines、includes，"
+                              f"多了 {bad}")
+                if "rtl" in ov:
+                    self._srcs(e, ov["rtl"], f"views.{v}.rtl", made, need=False)
+                self._defines(ov.get("defines"), f"views.{v}.defines")
+            for p in e.get("receipt") or []:
+                if not isinstance(p, dict) or not p.get("symbol") or set(p) - {"symbol", "expect"}:
+                    raise Bad(f"{self.path}: receipt 的每一条写 symbol，可带 expect：{p}")
+                if bad := sorted(set(p.get("expect") or {}) - EXPECT):
+                    raise Bad(f"{self.path}: 探针 {p['symbol']} 的 expect 不认 {bad}，"
+                              f"只有 {sorted(EXPECT)}")
+                for ref in (p.get("expect") or {}).values():
+                    m = PH.fullmatch(ref.strip()) if isinstance(ref, str) else None
+                    if m and m.group(1) not in self.knobs():
+                        raise Bad(f"{self.path}: 探针 {p['symbol']} 的期望引用了不存在的旋钮 "
+                                  f"{m.group(1)}")
             for g in e.get("generate") or []:
                 bad = set(g) - {"out", "from", "when", "set", "syntax",
                                 "expose", "skip", "domain"}
@@ -499,17 +506,7 @@ class Pkg:
             for pn, v in (e.get("params") or {}).items():
                 if isinstance(v, str) and v not in knobs:
                     raise Bad(f"{self.path}: foreign 的参数 {pn} 投影到了不存在的旋钮 {v}")
-            d = e.get("defines")
-            if isinstance(d, dict):
-                for macro, src in d.items():
-                    if isinstance(src, dict):
-                        if set(src) - {"when"} or "when" not in src:
-                            raise Bad(f"{self.path}: 宏 {macro} 的表里只认 when")
-                        src = src["when"]
-                    if isinstance(src, str) and src not in knobs:
-                        raise Bad(f"{self.path}: 宏 {macro} 投影到了不存在的旋钮 {src}")
-            elif d is not None and not isinstance(d, list):
-                raise Bad(f"{self.path}: foreign 的 defines 要写成列表或「宏: 旋钮」的表")
+            self._defines(e.get("defines"), "defines")
             for k in ("clock", "reset"):
                 c = e.get(k)
                 if c is not None and "port" not in c:
@@ -534,6 +531,66 @@ class Pkg:
                               f"对不到它的端口上")
             return e
         return None
+
+    def _srcs(self, e: dict, fs, what: str, made: set, need: bool) -> None:
+        from xirang_core import sources
+        if not isinstance(fs, list) or (need and not fs):
+            raise Bad(f"{self.path}: foreign 的 {what} 是{'非空的' if need else ''}条目列表")
+        for f in fs:
+            try:
+                k = sources.kind(f)
+            except Bad as ex:
+                raise Bad(f"{self.path}: foreign 的 {what}：{ex}") from None
+            if isinstance(f, dict):
+                for w in (f.get("when") or {}):
+                    if w not in self.knobs():
+                        raise Bad(f"{self.path}: foreign 的 {what} 里 "
+                                  f"when 用了不存在的旋钮 {w}")
+            if k not in ("path", "flist"):
+                continue
+            f = f if isinstance(f, str) else f[k]
+            if f in made or (self.root / f).is_file():
+                continue
+            # 生成器类的上游：RTL 要先跑一遍对方的脚本才存在。
+            # 报「树上没有」等于把人晾在那里，要说清先跑什么
+            hint = ""
+            if setup := e.get("setup"):
+                hint = f"——它是生成物，先跑 `ran run {self.name} {setup}`"
+            raise Bad(f"{self.path}: foreign 的 {what} 列了树上没有的 {f}{hint}")
+
+    def _defines(self, d, what: str) -> None:
+        if d is None or isinstance(d, list):
+            return
+        if not isinstance(d, dict):
+            raise Bad(f"{self.path}: foreign 的 {what} 要写成列表或「宏: 旋钮」的表")
+        knobs = self.knobs()
+        for macro, src in d.items():
+            if names := PH.findall(macro):
+                for n in names:
+                    if knobs.get(n, {}).get("type") != "choice":
+                        raise Bad(f"XR-MACRO-001 {self.path}: 宏 {macro} 的占位符 {n} "
+                                  f"要指向档位旋钮" + ("" if n in knobs else "，这个旋钮不存在"))
+                continue
+            if isinstance(src, dict) and "from" in src:
+                k = src["from"]
+                if set(src) - {"from", "map"} or not isinstance(src.get("map"), dict):
+                    raise Bad(f"{self.path}: 宏 {macro} 的逐档映射写 from 与 map")
+                if k not in knobs:
+                    raise Bad(f"XR-MACRO-001 {self.path}: 宏 {macro} 映射的旋钮 {k} 不存在")
+                dom = [True, False] if _isbool(knobs[k]) else knobs[k].get("values")
+                if not dom:
+                    raise Bad(f"XR-MACRO-001 {self.path}: 宏 {macro} 逐档映射要档位旋钮，{k} 不是")
+                if miss := [v for v in dom if v not in src["map"]]:
+                    raise Bad(f"XR-MACRO-002 {self.path}: 宏 {macro} 的逐档映射漏了 {miss}")
+                continue
+            if isinstance(src, dict):
+                if set(src) - {"when"} or "when" not in src:
+                    raise Bad(f"{self.path}: 宏 {macro} 的表里只认 when，或 from 加 map")
+                src = src["when"]
+                if src in knobs and not _isbool(knobs[src]):
+                    raise Bad(f"{self.path}: 宏 {macro} 是开关宏，{src} 不是布尔旋钮")
+            if isinstance(src, str) and src not in knobs:
+                raise Bad(f"{self.path}: 宏 {macro} 投影到了不存在的旋钮 {src}")
 
     def bsv_emit(self) -> dict:
         """kind: bsv 的 emit 段。装配器要靠它知道 BSV 侧叫什么名字。"""

@@ -362,11 +362,12 @@ def cmd_wrap(args) -> int:
     if (fe := pkg.foreign_emit()) is not None:
         vals = resolve_pkg(pkg, {}, f"{pkg.path} (default)", None, cli)
         out = pathlib.Path(args.out or (pkg.root / "wrap"))
-        got = verilog.elaborate(foreign.files(pkg, knobs=foreign.knobs_of(vals)),
-                                fe["top"],
-                                foreign.numeric(pkg, vals),
-                                out / f"{fe['top']}.v", foreign.defines(pkg, vals),
-                                foreign.includes(pkg), pkg.root)
+        knobs = foreign.knobs_of(vals)
+        src = foreign.sources(pkg, "syn", knobs)
+        got = verilog.elaborate(src.files, fe["top"], foreign.numeric(pkg, vals),
+                                out / f"{fe['top']}.v", foreign.defines(pkg, vals, "syn"),
+                                foreign.includes(pkg, "syn", knobs), pkg.root,
+                                libdirs=src.libdirs)
         print(f"{got}")
         baked = ", ".join(f"{k}={v}" for k, v in sorted(foreign.bake(pkg, vals).items()))
         print(f"  {DIM}{fe['top']}  参数已展开：{baked}{OFF}")

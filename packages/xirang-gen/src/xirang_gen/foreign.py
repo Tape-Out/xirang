@@ -3,7 +3,13 @@ import pathlib
 import re
 
 from xirang_back import sv
-from xirang_core.manifest import Bad, Pkg, _syntaxes
+from xirang_core import diag
+from xirang_core.manifest import PH, Bad, Pkg, _syntaxes
+from xirang_core.sources import Sources, expand
+
+VIEWS = ("rtl", "sim", "syn")
+OPS = {"eq": lambda a, b: a == b, "ne": lambda a, b: a != b, "ge": lambda a, b: a >= b,
+       "le": lambda a, b: a <= b, "in": lambda a, b: a in b}
 
 
 def bake(pkg: Pkg, vals) -> dict[str, int]:
@@ -99,26 +105,89 @@ def generate(pkg: Pkg, vals) -> list[tuple[str, int]]:
     return out
 
 
-def defines(pkg: Pkg, vals=None) -> list[str]:
+def _view(pkg: Pkg, e: dict, view: str):
+    """一个视图的 (源码条目, 宏的各层, include 目录)：`rtl` 打底，`sim`、`syn` 叠上去。"""
+    if view not in VIEWS:
+        raise Bad(f"XR-VIEW-001 {pkg.name}: 视图 {view} 不认识，只有 {list(VIEWS)}")
+    rtl, defs, incs = list(e.get("rtl") or []), [e.get("defines")], list(e.get("includes") or [])
+    if view == "sim" and isinstance(e.get("sim"), list):
+        rtl = list(e["sim"])
+    ov = (e.get("views") or {}).get(view) or {}
+    rep = set(ov.get("replace") or [])
+    if "rtl" in ov:
+        rtl = list(ov["rtl"]) if "rtl" in rep else rtl + list(ov["rtl"])
+    if "defines" in ov:
+        defs = [ov["defines"]] if "defines" in rep else defs + [ov["defines"]]
+    if "includes" in ov:
+        incs = list(ov["includes"]) if "includes" in rep else incs + list(ov["includes"])
+    return rtl, [d for d in defs if d], incs
+
+
+def _emit(pkg: Pkg) -> dict:
+    e = pkg.foreign_emit()
+    if e is None:
+        raise Bad(f"{pkg.name} 不是黑盒包")
+    return e
+
+
+def sources(pkg: Pkg, view: str = "rtl", knobs=None) -> Sources:
+    rtl, _, _ = _view(pkg, _emit(pkg), view)
+    return expand(pkg.root, rtl, knobs)
+
+
+def defines(pkg: Pkg, vals=None, view: str = "rtl", src: Sources | None = None) -> list[str]:
     """这份黑盒要带哪些宏。
 
-    两种写法。列表是固定的宏（`RISCV_FORMAL`）。表是**投影**：宏的值取自旋钮，
+    列表是固定的宏（`RISCV_FORMAL`）。表是**投影**：宏的值取自旋钮，
     Vortex 整份配置就是这样给的（`-DVX_CFG_NUM_CORES=4`），没有一个 Verilog
     参数。布尔旋钮写成 `{when: 旋钮}`，开了才定义这个宏、且不带值——
-    `ifdef` 判的是「定义没定义」，给它 `=0` 反而是打开。
+    `ifdef` 判的是「定义没定义」，给它 `=0` 反而是打开。名字里写 `{{档位旋钮}}`
+    出选择宏，`{from: 旋钮, map: {档: 值}}` 逐档给值。Flist 的宏在前，同名的清单为准。
     """
-    e = pkg.foreign_emit() or {}
-    got = e.get("defines") or []
+    e = pkg.foreign_emit()
+    if e is None:
+        return []
+    return list(_merge(pkg, vals, view, src)[0].values())
+
+
+def _merge(pkg: Pkg, vals, view: str, src: Sources | None):
+    """Flist 的宏在前，清单的同名宏盖过它；被盖掉的另列出来。"""
+    rtl, groups, _ = _view(pkg, _emit(pkg), view)
+    if src is None:
+        src = expand(pkg.root, rtl, knobs_of(vals) if vals is not None else None)
+    fl = {d.split("=")[0]: d for d in src.defines}
+    out = dict(fl)
+    for g in groups:
+        for d in _render(pkg, g, vals):
+            out[d.split("=")[0]] = d
+    return out, [(fl[k], out[k]) for k in fl if out[k] != fl[k]]
+
+
+def _render(pkg: Pkg, got, vals) -> list[str]:
     if isinstance(got, list):
         return [str(x) for x in got]
     out = []
     for macro, src in got.items():
+        if PH.search(macro):
+            name = PH.sub(lambda m: str(_knob(pkg, vals, m.group(1), macro)), macro)
+            if src is True:
+                out.append(name)
+            elif src not in (False, None):
+                out.append(f"{name}={src}")
+            continue
+        if isinstance(src, dict) and "from" in src:
+            v = _knob(pkg, vals, src["from"], macro)
+            table = src.get("map") or {}
+            if v not in table:
+                raise Bad(f"XR-MACRO-002 {pkg.name}: 宏 {macro} 的逐档映射没写 {v}")
+            if table[v] is not None:
+                out.append(f"{macro}={table[v]}")
+            continue
         if isinstance(src, dict):
             k = src.get("when")
             if k is None:
-                raise Bad(f"{pkg.name}: 宏 {macro} 的表里只认 when")
-            v = _knob(pkg, vals, k, macro)
-            if v:
+                raise Bad(f"{pkg.name}: 宏 {macro} 的表里只认 when、from")
+            if _knob(pkg, vals, k, macro):
                 out.append(str(macro))
             continue
         v = src if not isinstance(src, str) else _knob(pkg, vals, src, macro)
@@ -138,32 +207,42 @@ def _knob(pkg: Pkg, vals, name: str, macro: str):
     return getattr(vals[name], "value", vals[name])
 
 
-def includes(pkg: Pkg) -> list[pathlib.Path]:
-    """`include 的搜索路径，按包根解成绝对路径。"""
+def includes(pkg: Pkg, view: str = "rtl", knobs=None,
+             src: Sources | None = None) -> list[pathlib.Path]:
+    """`include 的搜索路径，按包根解成绝对路径；Flist 的 `+incdir+` 跟在后面。"""
     e = pkg.foreign_emit()
-    return [pkg.root / d for d in (e or {}).get("includes") or []]
+    if e is None:
+        return []
+    rtl, _, incs = _view(pkg, e, view)
+    src = src or expand(pkg.root, rtl, knobs)
+    return [pkg.root / d for d in incs] + [d for d in src.incdirs
+                                           if d not in {pkg.root / x for x in incs}]
 
 
 def files(pkg: Pkg, view: str = "rtl", knobs=None) -> list[pathlib.Path]:
-    """综合视图或仿真视图的文件，按包根解成绝对路径。
+    """某个视图的文件，按包根解成绝对路径。
 
     条目可以写成 `{path: …, when: {旋钮: 值}}`：上游的某些源码只在某档配置下
     才编得动。cv32e40p 的 fpnew 就是这样——它在常量函数里写 `$fatal`，yosys
     直接拒绝，而那段只有 fpu=1 才走得到。`knobs` 不给就全要，用于还没解出配置
     的场合（起草声明、核对端口）。
     """
-    e = pkg.foreign_emit()
-    if e is None:
-        raise Bad(f"{pkg.name} 不是黑盒包")
-    out = []
-    for f in e.get(view) or e.get("rtl"):
-        if isinstance(f, dict):
-            if knobs is not None and any(knobs.get(k) != v
-                                         for k, v in (f.get("when") or {}).items()):
-                continue
-            f = f["path"]
-        out.append(pkg.root / f)
-    return out
+    return sources(pkg, view, knobs).files
+
+
+def _flags(pkg: Pkg) -> list[str]:
+    return diag.slang_flags([("包 ip.yaml", pkg.ip.get("diagnostics"))])[0]
+
+
+def _elab(pkg: Pkg, vals, params: dict, probes=()):
+    """用这个包的全部声明展开一次：源码、宏、目录、库目录、放宽的诊断。"""
+    e = _emit(pkg)
+    knobs = knobs_of(vals)
+    src = sources(pkg, "rtl", knobs)
+    return sv.elaborate(src.files, e["top"], params, defines(pkg, vals, src=src),
+                        includes(pkg, knobs=knobs, src=src),
+                        libdirs=src.libdirs, libext=src.libext, flags=_flags(pkg),
+                        probes=probes)
 
 
 def knobs_of(vals) -> dict:
@@ -181,12 +260,10 @@ def numeric(pkg: Pkg, vals) -> dict:
     want = bake(pkg, vals)
     if all(not isinstance(v, str) for v in want.values()):
         return want
-    e = pkg.foreign_emit()
     if not sv.available():
         raise Bad(f"{pkg.name}: 有枚举档位的参数要装 pyslang 才展得成数"
                   f"（pip install xirang[sv]）")
-    _, pars, _ = sv.elaborate(files(pkg, knobs=knobs_of(vals)), e["top"], {},
-                              defines(pkg), includes(pkg))
+    pars = _elab(pkg, vals, {}).params
     out = {}
     for k, v in want.items():
         if isinstance(v, str):
@@ -214,13 +291,40 @@ def receipt(pkg: Pkg, vals) -> list[tuple[str, str]]:
                                f"（pip install xirang[sv]）")]
     generate(pkg, vals)
     want = bake(pkg, vals)
-    got = sv.elaborate(files(pkg, knobs=knobs_of(vals)), e["top"], want,
-                       defines(pkg, vals), includes(pkg))
-    ports, pars, errs = got
+    probes = e.get("receipt") or []
+    got = _elab(pkg, vals, want, probes=[p["symbol"] for p in probes])
+    ports, pars, errs = got.ports, got.params, got.errs
     out: list[tuple[str, str]] = []
+    over = [("包 ip.yaml", pkg.ip.get("diagnostics"))]
+    for code in sorted({c for c in diag.flatten(pkg.ip.get("diagnostics"))
+                        if c.startswith(diag.SLANG)}):
+        if not diag.blocks(diag.resolve(code, over)[0]):
+            flag = diag.SLANG_COMPAT[code[len(diag.SLANG):]]
+            out.append((code, f"已放宽，展开时开了 {flag}"))
+    for flist, mine in _merge(pkg, vals, "rtl", None)[1]:
+        out.append(("XR-SRC-003", f"Flist 的 {flist} 被清单的 {mine} 盖掉"))
+    for p in ports.values():
+        if p.count == 0:
+            out.append(("XR-RCPT-001", f"{e['top']} 的端口 {p.name} 数组长度解出 0"))
     if errs:
-        out.append(("XR-FGN-001", f"{e['top']} 展开时 slang 报错：{errs[0]}"))
+        # 一种诊断报一条：上游一处写法常在几百个地方重复
+        seen = set()
+        for code, txt in errs:
+            if code not in seen:
+                seen.add(code)
+                out.append((code, f"{e['top']} 展开时 slang 报错：{txt}"))
         return out
+    for p in probes:
+        s = p["symbol"]
+        if s not in got.probes:
+            out.append(("XR-RCPT-003", f"探针找不到 {s}"))
+            continue
+        v = got.probes[s]
+        for op, ref in (p.get("expect") or {}).items():
+            if isinstance(ref, str) and (m := PH.fullmatch(ref.strip())):
+                ref = _knob(pkg, vals, m.group(1), s)
+            if not OPS[op](v, ref):
+                out.append(("XR-RCPT-002", f"{s} = {v}，期望 {op} {ref}"))
 
     named: list[str] = []
     for c in ("clock", "reset"):
@@ -349,9 +453,9 @@ def draft(files, top: str, clock: str = "clk", reset: str = "rst_n",
     got = sv.elaborate(files, top, {}, defines, includes)
     if got is None:
         raise Bad("出草稿要 pyslang")
-    ports, pars, errs = got
+    ports, pars, errs = got.ports, got.params, got.errs
     if errs:
-        raise Bad(f"{top} 展开不了：{errs[0]}")
+        raise Bad(f"{top} 展开不了：{errs[0][0]} {errs[0][1]}")
 
     L = ["params:"]
     feats = ["features:"]
@@ -414,9 +518,7 @@ def elaborates(pkg: Pkg, vals) -> list[str]:
     if e is None or not sv.available():
         return []
     generate(pkg, vals)
-    got = sv.elaborate(files(pkg, knobs=knobs_of(vals)), e["top"], bake(pkg, vals),
-                       defines(pkg, vals), includes(pkg))
+    got = _elab(pkg, vals, bake(pkg, vals))
     if got is None:
         return []
-    _, _, errs = got
-    return [errs[0][:200]] if errs else []
+    return [f"{c} {t}"[:200] for c, t in got.errs[:1]]

@@ -8,6 +8,7 @@ pyslang 是可选的（`pip install xirang[sv]`）。装不上就报「没法核
 """
 import dataclasses
 import shlex
+import typing
 
 
 @dataclasses.dataclass(frozen=True)
@@ -15,6 +16,17 @@ class Port:
     name: str
     direction: str      # in / out / inout
     width: int          # 位数；解不出来就是 0
+    count: int | None = None    # 非打包数组的元素个数；不是数组为 None
+
+
+class Elab(typing.NamedTuple):
+    ports: dict
+    params: dict
+    errs: list          # [(检查号, 诊断原文)]；slang 的写成 slang:<诊断名>
+    probes: dict = {}
+
+
+FAIL = "XR-FGN-001"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -83,14 +95,25 @@ def _width(t) -> int:
         return 0
 
 
+def _unpacked(t) -> int | None:
+    if not getattr(t, "isUnpackedArray", False):
+        return None
+    n = 1
+    while getattr(t, "isUnpackedArray", False):
+        n *= int(t.range.width)
+        t = t.elementType
+    return n
+
+
 def elaborate(files, top: str, params: dict, defines=(), includes=(), *,
-              libdirs=(), libext=(), flags=()):
-    """展开一次，返回 (端口表, 参数表, 出错的诊断)。没装 pyslang 就返回 None。
+              libdirs=(), libext=(), flags=(), probes=()) -> "Elab | None":
+    """展开一次，返回 Elab（端口表、参数表、出错的诊断、探针取值）。没装 pyslang 就返回 None。
 
     参数表是 {名字: Param}。位宽与枚举档位都要跟着出来——按取值猜类型会出错，
     而枚举参数用整数去覆盖不会报错，只会悄悄没生效。
 
-    `libdirs` 按模块名找文件（`-y`）；`flags` 是诊断闸门放宽后要开的 slang 开关。
+    `libdirs` 按模块名找文件（`-y`）；`flags` 是诊断闸门放宽后要开的 slang 开关；
+    `probes` 写 `包::名字` 或顶层参数名，找不到的不进结果。
     """
     if not available():
         return None
@@ -120,20 +143,36 @@ def elaborate(files, top: str, params: dict, defines=(), includes=(), *,
     # 解析没过就建编译，pyslang 会段错误，整个进程跟着没了
     if not (drv.parseCommandLine(shlex.join(args), driver.CommandLineOptions())
             and drv.processOptions()):
-        return ({}, {}, [f"slang 不认这组参数：{shlex.join(args[1:])}"])
+        return Elab({}, {}, [(FAIL, f"slang 不认这组参数：{shlex.join(args[1:])}")])
     if not drv.parseAllSources():
-        return ({}, {}, [f"slang 读不进源文件：{shlex.join(args[1:])}"])
+        return Elab({}, {}, [(FAIL, f"slang 读不进源文件：{shlex.join(args[1:])}")])
     c = drv.createCompilation()
     sm = drv.sourceManager
     tops = list(c.getRoot().topInstances)
     if not tops:
-        return ({}, {}, [f"slang 展开不出顶层 {top}"])
+        return Elab({}, {}, [(FAIL, f"slang 展开不出顶层 {top}")])
     body = tops[0].body
+    diags = list(c.getAllDiagnostics())
+    zero = any(str(d.code).endswith("(ValueMustBePositive)") for d in diags)
     ports = {}
     for m in body:
         if isinstance(m, ast.PortSymbol):
-            ports[m.name] = Port(m.name, str(m.direction).split(".")[-1].lower(),
-                                 _width(m.type))
+            t = m.type
+            n = 0 if zero and getattr(t, "isError", False) else _unpacked(t)
+            w = _width(t)
+            if n:
+                e = t
+                while getattr(e, "isUnpackedArray", False):
+                    e = e.elementType
+                w = _width(e) * n
+            ports[m.name] = Port(m.name, str(m.direction).split(".")[-1].lower(), w, n)
+    found = {}
+    for s in probes:
+        pkg, _, name = s.rpartition("::")
+        scope = c.getPackage(pkg) if pkg else body
+        sym = scope.find(name) if scope is not None else None
+        if sym is not None and hasattr(sym, "value"):
+            found[s] = _num(sym.value)
     got = {}
     for m in body:
         if isinstance(m, ast.ParameterSymbol):
@@ -157,12 +196,13 @@ def elaborate(files, top: str, params: dict, defines=(), includes=(), *,
     client.showColors(False)
     eng.addClient(client)
     errs = []
-    for d in c.getAllDiagnostics():
+    for d in diags:
         # `isError` 对警告也为真；严重级要问引擎。上游的风格警告（未命名的
         # generate、case 少 default）不是我们的事，真编不过才是
         if eng.getSeverity(d.code, d.location) != DiagnosticSeverity.Error:
             continue
         client.clear()
         eng.issue(d)
-        errs.append(client.getString().strip())
-    return ports, got, errs
+        name = str(d.code).removeprefix("DiagCode(").removesuffix(")")
+        errs.append((f"slang:{name}", client.getString().strip()))
+    return Elab(ports, got, errs, found)

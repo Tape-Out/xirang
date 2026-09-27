@@ -57,7 +57,7 @@ def script(files, top: str, params: dict, out: pathlib.Path,
 
 def elaborate(files, top: str, params: dict, out: pathlib.Path,
               defines=(), includes=(), root: pathlib.Path | None = None,
-              secs: int = 1800) -> pathlib.Path:
+              secs: int = 1800, libdirs=()) -> pathlib.Path:
     """写出展开后的 Verilog，返回它的路径。
 
     yosys 读不动 SystemVerilog 的包与结构（`package` 一行就是 syntax error），
@@ -67,13 +67,14 @@ def elaborate(files, top: str, params: dict, out: pathlib.Path,
     out.parent.mkdir(parents=True, exist_ok=True)
     files = list(files)
     here = root
-    if any(str(f).endswith(".sv") for f in files):
+    # 按模块名找文件（`-y`）yosys 的 read_verilog 不认，sv2v 认
+    if libdirs or any(str(f).endswith(".sv") for f in files):
         files, cut, extra = strip_sim(files, out.parent / "_synth")
         if cut:
             print(f"  抹掉 {cut} 段 translate_off（上游标明不进综合）")
         includes = list(includes) + extra
         files = [to_v2005(files, out.with_suffix(".sv2v.v"), top, defines,
-                          includes, secs // 2)]
+                          includes, secs // 2, libdirs)]
         defines = includes = ()   # 宏与 include 在翻译那一步就处理掉了
         here = out.parent
     # yosys 把源文件路径写进函数局部线的名字（`\f$func$<路径>:<行>$<序号>`），
@@ -169,7 +170,7 @@ def strip_sim(files, work: pathlib.Path):
 
 
 def to_v2005(files, out: pathlib.Path, top: str | None = None,
-             defines=(), includes=(), secs: int = 900) -> pathlib.Path:
+             defines=(), includes=(), secs: int = 900, libdirs=()) -> pathlib.Path:
     """SystemVerilog 翻成 Verilog-2005。
 
     **它不展开参数**——实测 `--top` 只删没被例化的模块，`parameter` 原样保留。
@@ -177,7 +178,7 @@ def to_v2005(files, out: pathlib.Path, top: str | None = None,
     """
     out.parent.mkdir(parents=True, exist_ok=True)
     cmd = [need("sv2v"), *[f"-D{d}" for d in defines],
-           *[f"-I{i}" for i in includes]]
+           *[f"-I{i}" for i in includes], *[f"-y{d}" for d in libdirs]]
     if top:
         cmd.append(f"--top={top}")
     cmd += [str(f) for f in files]

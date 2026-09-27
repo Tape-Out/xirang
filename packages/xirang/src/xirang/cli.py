@@ -86,7 +86,7 @@ def cmd_config(args) -> int:
 
 def _why_check(res: Resolved, pkgs, code: str) -> int:
     """一道检查此刻是哪一级，以及这一级从哪来。与旋钮取值同一个面板。"""
-    c = diag.CHECKS[code]
+    c = diag.check(code)
     layers = [("包 ip.yaml", (pkgs[res.top].ip.get("diagnostics") if res.top in pkgs else None))]
     lv, why = diag.resolve(code, layers)
     print(f"{BOLD}{code}{OFF} = {BOLD}{lv.name}{OFF}"
@@ -97,7 +97,7 @@ def _why_check(res: Resolved, pkgs, code: str) -> int:
     print("  层叠（低到高，越靠下越优先）：")
     print(f"    {'✔ ' if why == '默认' else '  '}默认        {c.level.name}")
     for src, over in layers:
-        got = diag.level_of((over or {}).get(code))
+        got = diag.level_of(diag.flatten(over).get(code))
         mark = "✔ " if (got is not None and why == src) else "  "
         print(f"    {mark}{src:<11} {got.name if got is not None else '—'}")
     print()
@@ -109,6 +109,8 @@ def _why(res: Resolved, pkgs, path: str) -> int:
     """CSS 那种 computed 面板：一条属性的完整来历。"""
     if path.upper() in diag.CHECKS:
         return _why_check(res, pkgs, path.upper())
+    if path.startswith(diag.SLANG):
+        return _why_check(res, pkgs, path)
     hit = res.find(path)
     if not hit:
         print(f"没有 {path}——旋钮写 gpio0.numPins，检查号写 XR-AREA-003", file=sys.stderr)

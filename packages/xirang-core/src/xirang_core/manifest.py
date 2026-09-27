@@ -314,12 +314,19 @@ class Pkg:
         self._check_upstream()
 
         # 检查号与级别写错了要当场报：写错一个号，那道门禁的覆盖就静默失效
-        for code, lv in (ip.get("diagnostics") or {}).items():
-            if code not in diag.CHECKS:
+        over = ip.get("diagnostics") or {}
+        for key in diag.SUGAR:
+            if key in over and not isinstance(over[key], list):
+                raise Bad(f"{self.path}: diagnostics 的 {key} 是检查号列表")
+        for code, lv in diag.flatten(over).items():
+            if not diag.known(code):
                 raise Bad(f"{self.path}: diagnostics 里不认识的检查号 {code}")
             if diag.level_of(lv) is None:
                 raise Bad(f"{self.path}: {code} 的级别 {lv} 不认识，"
                           f"只有 {list(diag.Level.__members__)}")
+        _, bad = diag.slang_flags([("包 ip.yaml", over)])
+        if bad:
+            raise Bad(f"XR-DIAG-001 {self.path}: slang 没有放宽 {bad} 的开关")
 
         # regmap 里出现的门控旋钮必须在 ip.yaml 声明过。档位旋钮写成
         # {名字: [档...]}，而定宽的档位写在 params，所以两边都认

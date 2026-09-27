@@ -7,6 +7,7 @@ pyslang 是可选的（`pip install xirang[sv]`）。装不上就报「没法核
 **不是「核对过了」**。没量出来的说成过了，比不查更糟。
 """
 import dataclasses
+import shlex
 
 
 @dataclasses.dataclass(frozen=True)
@@ -82,42 +83,48 @@ def _width(t) -> int:
         return 0
 
 
-def elaborate(files, top: str, params: dict, defines=(), includes=()):
+def elaborate(files, top: str, params: dict, defines=(), includes=(), *,
+              libdirs=(), libext=(), flags=()):
     """展开一次，返回 (端口表, 参数表, 出错的诊断)。没装 pyslang 就返回 None。
 
     参数表是 {名字: Param}。位宽与枚举档位都要跟着出来——按取值猜类型会出错，
     而枚举参数用整数去覆盖不会报错，只会悄悄没生效。
+
+    `libdirs` 按模块名找文件（`-y`）；`flags` 是诊断闸门放宽后要开的 slang 开关。
     """
     if not available():
         return None
-    from pyslang import TimeScale  # noqa: F401
-    from pyslang import (Bag, DiagnosticEngine, DiagnosticSeverity,
-                         SourceManager, TextDiagnosticClient, ast, syntax)
-    from pyslang.parsing import PreprocessorOptions
+    from pyslang import DiagnosticEngine, DiagnosticSeverity, TextDiagnosticClient, ast, driver
 
-    o = ast.CompilationOptions()
-    o.topModules = {top}
-    o.paramOverrides = [f"{k}={_lit(v)}" for k, v in params.items()]
     # 一份设计里有的文件写了 `timescale 有的没写，slang 就把「没写」当错误报。
     # 那是仿真的事，与「这组配置展不展得开」无关——pulp 的 hwpe 系列全是这样。
     # 给个默认值，缺的就按它算
-    o.defaultTimeScale = TimeScale.fromString("1ns/1ps")
-    c = ast.Compilation(Bag([o]))
+    args = ["slang", "--top", top, "--timescale", "1ns/1ps", *flags]
+    for k, v in params.items():
+        args += ["-G", f"{k}={_lit(v)}"]
     # 宏要跟 yosys 给的是同一套，否则两边看到的端口表不是同一份：picorv32 的
     # rvfi 那 177 根端口在 `RISCV_FORMAL` 里，不给宏它们压根不存在
-    sm = SourceManager()
-    bag = Bag()
-    if defines or includes:
-        po = PreprocessorOptions()
-        if defines:
-            po.predefines = list(defines)
-        if includes:
-            # `include 找不到文件不是警告是错误：ibex 的 prim_assert.sv 住在
-            # vendored 的 prim 目录里，不给路径整棵树都编不过
-            po.additionalIncludePaths = [str(x) for x in includes]
-        bag = Bag([po])
-    for f in files:
-        c.addSyntaxTree(syntax.SyntaxTree.fromFile(str(f), sm, bag))
+    for d in defines:
+        args += ["-D", str(d)]
+    # `include 找不到文件不是警告是错误：ibex 的 prim_assert.sv 住在
+    # vendored 的 prim 目录里，不给路径整棵树都编不过
+    for x in includes:
+        args += ["-I", str(x)]
+    for x in libdirs:
+        args += ["-y", str(x)]
+    for x in libext:
+        args += ["--libext", str(x)]
+    args += [str(f) for f in files]
+    drv = driver.Driver()
+    drv.addStandardArgs()
+    # 解析没过就建编译，pyslang 会段错误，整个进程跟着没了
+    if not (drv.parseCommandLine(shlex.join(args), driver.CommandLineOptions())
+            and drv.processOptions()):
+        return ({}, {}, [f"slang 不认这组参数：{shlex.join(args[1:])}"])
+    if not drv.parseAllSources():
+        return ({}, {}, [f"slang 读不进源文件：{shlex.join(args[1:])}"])
+    c = drv.createCompilation()
+    sm = drv.sourceManager
     tops = list(c.getRoot().topInstances)
     if not tops:
         return ({}, {}, [f"slang 展开不出顶层 {top}"])

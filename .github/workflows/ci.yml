@@ -16,42 +16,15 @@ jobs:
           python-version: '3.14'
 
       - name: 装起来
-        run: uv sync
+        run: uv sync --all-packages --all-extras
 
       # F 与 E9 是真错：未定义的名字、引用在赋值之前、语法错。
       # 「局部变量遮蔽同名导入」归 F823——那一条让整条命令挂过一次。
       - name: 静态检查
         run: uv run ruff check packages tests
 
-      - name: 结构
-        run: uv run python tests/test_structure.py
-
-      - name: legal 的校验
-        run: uv run python tests/test_legal.py
-
-      - name: wrdata 真的交值
-        run: uv run python tests/test_wrdata.py
-
-      - name: woclr 每条写路径都清零
-        run: uv run python tests/test_woclr.py
-
-      - name: 第一次量价目表的规划
-        run: uv run python tests/test_init.py
-
-      - name: 死输入认得 BH
-        run: uv run python tests/test_deadread.py
-
-      - name: 控制口可以一直是会停顿的那个
-        run: uv run python tests/test_slowalways.py
-
-      - name: 单字段位域不从第 0 位起
-        run: uv run python tests/test_fieldlo.py
-
-      - name: 价目表重测超时整组杀
-        run: uv run python tests/test_recalkill.py
-
-      - name: 标量单字段的 volatile 字段不让软件写线
-        run: uv run python tests/test_volscalar.py
+      - name: 测试
+        run: uv run pytest tests -q -rfE
 
       - name: 命令面在
         run: |

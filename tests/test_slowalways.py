@@ -105,5 +105,9 @@ def main() -> int:
     return 1 if bad else 0
 
 
+def test_slowalways():
+    assert main() == 0
+
+
 if __name__ == "__main__":
     sys.exit(main())

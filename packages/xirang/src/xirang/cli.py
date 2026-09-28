@@ -686,6 +686,8 @@ def main(argv=None) -> int:
     def common(p):
         p.add_argument("top")
         p.add_argument("-s", "--set", action="append", help="覆盖旋钮，如 -s numPins=8")
+        p.add_argument("--flist", action="append", default=[],
+                       help="黑盒的 Flist，追加在清单条目之后，可多次给")
 
     c = sub.add_parser("config", help="computed 面板")
     common(c); c.add_argument("--why", help="一条旋钮或一道检查的来历，如 gpio0.numPins、XR-AREA-003")
@@ -730,21 +732,13 @@ def main(argv=None) -> int:
     common(wr); wr.add_argument("-o", "--out"); wr.set_defaults(fn=cmd_wrap)
 
     n = sub.add_parser("new", help="从模板铺一个新仓")
-
     n.add_argument("name", nargs="?", help="包名，省略则交互问")
-
     n.add_argument("-t", "--template", help="模板，如 ip/regmap")
-
     n.add_argument("--dir", help="铺到哪，默认当前目录下的同名目录")
-
     n.add_argument("--list", action="store_true", help="只列模板")
-
     n.add_argument("--vcs", default="git", choices=["git", "svn", "none"],
-
                    help="初始化哪种版本库，默认 git")
-
     n.set_defaults(fn=cmd_new)
-
 
     e = sub.add_parser("export", help="导出可再导入的完整配置")
     # --list 只是列表，不该逼人先给一个包名
@@ -803,6 +797,11 @@ def main(argv=None) -> int:
 
     args = ap.parse_args(argv)
     try:
+        if fl := getattr(args, "flist", None):
+            miss = [f for f in fl if not pathlib.Path(f).is_file()]
+            if miss:
+                raise Bad(f"--flist 给的文件不存在：{miss}")
+            foreign.FLISTS[args.top] = [pathlib.Path(f).resolve() for f in fl]
         return args.fn(args)
     except Bad as ex:
         print(f"xirang: {ex}", file=sys.stderr)

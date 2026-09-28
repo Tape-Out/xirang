@@ -67,6 +67,17 @@ def test_a_view_takes_only_its_four_keys(tmp_path):
         mk(tmp_path, views={"syn": {"replace": ["top"]}}).foreign_emit()
 
 
+def test_a_command_line_flist_goes_after_the_manifest(tmp_path, monkeypatch, capsys):
+    from xirang import cli
+    pk = mk(tmp_path)
+    (tmp_path / "extra.f").write_text("hw/sim.v\n+define+X=1\n", encoding="utf-8")
+    monkeypatch.setitem(foreign.FLISTS, "vx", [tmp_path / "extra.f"])
+    assert rel(pk, foreign.files(pk)) == ["hw/top.v", "hw/sim.v"]
+    assert foreign.defines(pk) == ["X=1"]
+    assert cli.main(["-p", str(tmp_path), "config", "vx", "--flist", "nope.f"]) == 1
+    assert "nope.f" in capsys.readouterr().err
+
+
 def test_glob_entries_pass_the_manifest(tmp_path):
     pk = mk(tmp_path, rtl=[{"glob": "hw/*.v", "exclude": ["hw/sim.v"]}])
     assert rel(pk, foreign.files(pk)) == ["hw/syn.v", "hw/top.v"]

@@ -8,6 +8,8 @@ from xirang_core.manifest import PH, Bad, Pkg, _syntaxes
 from xirang_core.sources import Sources, expand
 
 VIEWS = ("rtl", "sim", "syn")
+# 命令行 `--flist` 给的，按包名追加在清单条目之后
+FLISTS: dict[str, list[pathlib.Path]] = {}
 OPS = {"eq": lambda a, b: a == b, "ne": lambda a, b: a != b, "ge": lambda a, b: a >= b,
        "le": lambda a, b: a <= b, "in": lambda a, b: a in b}
 
@@ -120,6 +122,7 @@ def _view(pkg: Pkg, e: dict, view: str):
         defs = [ov["defines"]] if "defines" in rep else defs + [ov["defines"]]
     if "includes" in ov:
         incs = list(ov["includes"]) if "includes" in rep else incs + list(ov["includes"])
+    rtl += [{"flist": str(f)} for f in FLISTS.get(pkg.name, ())]
     return rtl, [d for d in defs if d], incs
 
 

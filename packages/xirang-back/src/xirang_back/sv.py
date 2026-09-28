@@ -123,6 +123,9 @@ def elaborate(files, top: str, params: dict, defines=(), includes=(), *,
     # 那是仿真的事，与「这组配置展不展得开」无关——pulp 的 hwpe 系列全是这样。
     # 给个默认值，缺的就按它算
     args = ["slang", "--top", top, "--timescale", "1ns/1ps", *flags]
+    # translate_off 那段上游明写不进综合，yosys 那边抹掉了（verilog.strip_sim），这边也跳过
+    for w in ("synopsys", "synthesis", "pragma"):
+        args += ["--translate-off-format", f"{w},translate_off,translate_on"]
     for k, v in params.items():
         args += ["-G", f"{k}={_lit(v)}"]
     # 宏要跟 yosys 给的是同一套，否则两边看到的端口表不是同一份：picorv32 的

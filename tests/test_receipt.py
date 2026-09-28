@@ -185,3 +185,19 @@ def test_probes_run_at_every_point_of_the_matrix(tmp_path):
     rep = matrix.run(pk, {pk.name: pk}, out=tmp_path / "o")
     bad = [r for r in rep.rows if r.mark.name == "bad"]
     assert bad and all("XR-RCPT-002" in r.note for r in bad)
+
+
+OFF = """module top #(parameter int N = 1) (input logic clk);
+// synthesis translate_off
+wire unused = &{1'b0, SW[16:7]};
+// synthesis translate_on
+endmodule
+"""
+
+
+def test_translate_off_is_skipped_like_the_synthesis_path(tmp_path):
+    """ao486 在 translate_off 里引用了一个根本不存在的 SW；yosys 那边本来就抹掉了。"""
+    pk = mk(tmp_path, {"hw/top.sv": OFF})
+    assert foreign.receipt(pk, {"n": V(1)}) == []
+    (tmp_path / "hw/top.sv").write_text(OFF.replace("// synthesis translate_off", ""))
+    assert codes(foreign.receipt(Pkg(tmp_path), {"n": V(1)})) == ["slang:UndeclaredIdentifier"]

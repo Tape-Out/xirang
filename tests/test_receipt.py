@@ -173,3 +173,15 @@ def test_a_setup_task_runs_before_its_sources_exist(tmp_path):
         foreign.files(pk)
     tasks.run(pk, "mk", {"n": V(1)}, tmp_path / "o")
     assert [f.name for f in foreign.files(pk)] == ["top.sv", "g.sv"]
+
+
+def test_probes_run_at_every_point_of_the_matrix(tmp_path):
+    """投影写死成字面量：默认那一点照样对得上，只有换一档才露出来。"""
+    from xirang_flow import matrix
+    rc = [{"symbol": "p::PORTS", "expect": {"eq": "{{n}}"}}]
+    pk = mk(tmp_path, {"hw/top.sv": TOP}, receipt=rc, defines={"N_PORTS": 1},
+            top={"params": {"n": {"type": "int", "default": 1, "range": [1, 4]}}})
+    assert foreign.receipt(pk, {"n": V(1)}) == []
+    rep = matrix.run(pk, {pk.name: pk}, out=tmp_path / "o")
+    bad = [r for r in rep.rows if r.mark.name == "bad"]
+    assert bad and all("XR-RCPT-002" in r.note for r in bad)

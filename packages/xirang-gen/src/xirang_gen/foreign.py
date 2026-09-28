@@ -315,9 +315,7 @@ def receipt(pkg: Pkg, vals) -> list[tuple[str, str]]:
             out.append((code, f"已放宽，展开时开了 {flag}"))
     for flist, mine in _merge(pkg, vals, "rtl", None)[1]:
         out.append(("XR-SRC-003", f"Flist 的 {flist} 被清单的 {mine} 盖掉"))
-    for p in ports.values():
-        if p.count == 0:
-            out.append(("XR-RCPT-001", f"{e['top']} 的端口 {p.name} 数组长度解出 0"))
+    out += _zero(e, ports)
     if errs:
         # 一种诊断报一条：上游一处写法常在几百个地方重复
         seen = set()
@@ -326,17 +324,7 @@ def receipt(pkg: Pkg, vals) -> list[tuple[str, str]]:
                 seen.add(code)
                 out.append((code, f"{e['top']} 展开时 slang 报错：{txt}"))
         return out
-    for p in probes:
-        s = p["symbol"]
-        if s not in got.probes:
-            out.append(("XR-RCPT-003", f"探针找不到 {s}"))
-            continue
-        v = got.probes[s]
-        for op, ref in (p.get("expect") or {}).items():
-            if isinstance(ref, str) and (m := PH.fullmatch(ref.strip())):
-                ref = _knob(pkg, vals, m.group(1), s)
-            if not OPS[op](v, ref):
-                out.append(("XR-RCPT-002", f"{s} = {v}，期望 {op} {ref}"))
+    out += _probes(pkg, vals, probes, got.probes)
 
     named: list[str] = []
     for c in ("clock", "reset"):
@@ -520,17 +508,41 @@ def draft(files, top: str, clock: str = "clk", reset: str = "rst_n",
     return chr(10).join(L + feats + P)
 
 
+def _zero(e: dict, ports: dict) -> list[tuple[str, str]]:
+    return [("XR-RCPT-001", f"{e['top']} 的端口 {p.name} 数组长度解出 0")
+            for p in ports.values() if p.count == 0]
+
+
+def _probes(pkg: Pkg, vals, probes, found: dict) -> list[tuple[str, str]]:
+    out = []
+    for p in probes:
+        s = p["symbol"]
+        if s not in found:
+            out.append(("XR-RCPT-003", f"探针找不到 {s}"))
+            continue
+        v = found[s]
+        for op, ref in (p.get("expect") or {}).items():
+            if isinstance(ref, str) and (m := PH.fullmatch(ref.strip())):
+                ref = _knob(pkg, vals, m.group(1), s)
+            if not OPS[op](v, ref):
+                out.append(("XR-RCPT-002", f"{s} = {v}，期望 {op} {ref}"))
+    return out
+
+
 def elaborates(pkg: Pkg, vals) -> list[str]:
-    """这一组参数展开得开吗。展不开就是这组取值非法，而清单没拦住它。
+    """这一组参数展开得开吗，探针在这一点上对不对。
 
     用 slang 而不是 yosys：矩阵有几十个点，slang 快一个量级，而这一步要的只是
-    「编得过」。真正要出网表时才轮到 yosys。
+    「编得过」。探针每点都查：旋钮投影写错了，默认那一点常常照样对得上。
     """
     e = pkg.foreign_emit()
     if e is None or not sv.available():
         return []
     generate(pkg, vals)
-    got = _elab(pkg, vals, bake(pkg, vals))
+    probes = e.get("receipt") or []
+    got = _elab(pkg, vals, bake(pkg, vals), probes=[p["symbol"] for p in probes])
     if got is None:
         return []
-    return [f"{c} {t}"[:200] for c, t in got.errs[:1]]
+    if got.errs:
+        return [f"{c} {t}"[:200] for c, t in got.errs[:1]]
+    return [f"{c} {m}" for c, m in _zero(e, got.ports) + _probes(pkg, vals, probes, got.probes)]

@@ -15,7 +15,7 @@ from xirang_back import tools, verilog
 from xirang_core import diag
 from xirang_core.manifest import GEN_HW, GEN_SW
 from xirang_area import check as area_check
-from xirang_area.price import ASM_BAND, annotate, model_note, stale
+from xirang_area.price import ASM_BAND, annotate, closure, model_note, stale
 from xirang_area.recal import init as do_init
 from xirang_area.recal import recal as do_recal
 from xirang_back.ecc import synth
@@ -56,7 +56,8 @@ def _resolve(args) -> tuple[Resolved, dict[str, Pkg]]:
     annotate(res, pkgs, lenient=True)
     # 库包也要查。原来只查作为实例出现的包，于是 hwcore 与 amba 改了源码
     # 也没人报警——而它们是全库踩着的那一层，改一行影响每一个 IP。
-    for name in sorted(pkgs):
+    # 但只查这颗芯片依赖到的，别处的旧价目表与它无关
+    for name in sorted(closure(pkgs.get(res.top), pkgs)):
         w = stale(pkgs[name])
         if w:
             print(f"\033[33m警告\033[0m {w}", file=sys.stderr)
@@ -69,12 +70,16 @@ def cmd_config(args) -> int:
     res, pkgs = _resolve(args)
     if args.why:
         return _why(res, pkgs, args.why)
-    print(f"{BOLD}{res.top}{OFF}  bus={res.bus}  合计 {res.area_um2:,.2f} µm²")
+    top = pkgs.get(res.top)
+    bus = "" if top is not None and top.foreign_emit() is not None else f"  bus={res.bus}"
+    miss = sorted(set(res.unpriced))
+    note = f"（{'、'.join(miss)} 没有价目表，未计入）" if miss else ""
+    print(f"{BOLD}{res.top}{OFF}{bus}  合计 {res.area_um2:,.2f} µm²{note}")
     for depth, inst in res.walk():
         pad = "  " * depth
         a = f"{inst.addr:#010x}" if inst.addr is not None else "-"
-        print(f"\n{pad}{BOLD}{inst.name}{OFF} : {inst.of} @ {a}"
-              f"   {inst.area_um2:,.2f} µm²")
+        area = "面积未知" if inst.of in miss else f"{inst.area_um2:,.2f} µm²"
+        print(f"\n{pad}{BOLD}{inst.name}{OFF} : {inst.of} @ {a}   {area}")
         for k, v in inst.values.items():
             mark = "!" if v.forced_by else " "
             cost = f"{v.area_um2:>10,.2f}" if v.area_um2 else " " * 10

@@ -190,6 +190,7 @@ def annotate(res: Resolved, pkgs: dict[str, Pkg], lenient: bool = False) -> Reso
         return s
 
     root = pkgs.get(res.top)
+    used = closure(root, pkgs)
     # 顶层自己的面积只有装配才另算。叶子做顶层时它就是那唯一的实例，
     # 上面的 rec 已经按真实旋钮算过了；这里再算一次既重复计价，
     # 又因为拿的是空旋钮表而直接报「价目表引用了不存在的旋钮」。
@@ -197,8 +198,9 @@ def annotate(res: Resolved, pkgs: dict[str, Pkg], lenient: bool = False) -> Reso
            if root and root.is_assembly and (root.ip.get("area") or {}).get("base")
            else 0.0)
     # 库里的模块整颗芯片只例化一次（总线绑定器、交换网），所以按包记一次。
+    # 只算这颗芯片依赖到的：从前把搜索路径上所有库包都加进来，一颗 uart 也背着三万多
     own += sum(price(p, {})[0] for n, p in pkgs.items()
-               if n != res.top and p.is_library
+               if n != res.top and n in used and p.is_library
                and (p.ip.get("area") or {}).get("base"))
     # 装配不是各实例之和：综合会跨边界优化，独立综合时保住的端口在装配里被并掉，
     # 而嵌套的握手又比独立边界贵。实测这个系数在 0.94 到 1.29 之间，取中。
@@ -208,12 +210,20 @@ def annotate(res: Resolved, pkgs: dict[str, Pkg], lenient: bool = False) -> Reso
     # 所以口径是「偏保守，但不超过 ASM_BAND」——两侧都查，见 cli 的 build。
     # 叶子的价目表仍是上界，装配这一层只是估计——两件事的承诺不同。
     fac = 1.0
-    for p in pkgs.values():
-        if p.is_library:
+    for n, p in pkgs.items():
+        if n in used and p.is_library:
             fac = max(fac, ((p.ip.get("area") or {}).get("assembly") or {})
                       .get("factor", 1.0))
     res.area_um2 = own + rec(res.instances) * fac
     return res
+
+
+def closure(top: Pkg | None, pkgs: dict[str, Pkg]) -> set[str]:
+    """顶层经依赖与例化走得到的包名。"""
+    if top is None:
+        return set()
+    from xirang_core.lock import resolve_deps
+    return set(resolve_deps(top, pkgs))
 
 
 def gen_parts(pkg: Pkg) -> list[tuple[str, str]]:

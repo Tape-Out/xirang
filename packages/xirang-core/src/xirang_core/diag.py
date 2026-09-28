@@ -55,6 +55,7 @@ CHECKS: dict[str, Check] = dict([
     _c("XR-SRC-001", Level.error, "glob 或正则一个文件都没匹配到"),
     _c("XR-SRC-002", Level.error, "Flist 里的变量没有值"),
     _c("XR-SRC-003", Level.info, "Flist 的宏或目录被清单覆盖"),
+    _c("XR-SRC-004", Level.error, "源码条目指向的文件不在"),
     _c("XR-VIEW-001", Level.error, "视图名不是 rtl、sim、syn"),
     _c("XR-MACRO-001", Level.error, "占位符指向不存在的旋钮，或不是档位旋钮"),
     _c("XR-MACRO-002", Level.error, "逐档映射漏了合法档位"),

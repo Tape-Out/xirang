@@ -44,10 +44,12 @@ def mk(root: pathlib.Path, *, setup=None, tasks=None, make_it=False) -> Pkg:
 
 
 def test_a_missing_generated_file_points_at_the_task(tmp_path):
-    """清单一读就报——不必等到构建那一步才发现 RTL 还没生成。"""
+    """清单要读得了，setup 才跑得起来；要文件的时候再指到那条任务。"""
+    from xirang_gen import foreign
+    pk = mk(tmp_path, setup="verilog", tasks={"verilog": "./mill ventus.run"})
     with pytest.raises(Bad) as e:
-        mk(tmp_path, setup="verilog", tasks={"verilog": "./mill ventus.run"})
-    assert "ran run vx verilog" in str(e.value)
+        foreign.files(pk)
+    assert "XR-SRC-004" in str(e.value) and "ran run vx verilog" in str(e.value)
 
 
 def test_without_setup_the_message_is_the_plain_one(tmp_path):

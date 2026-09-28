@@ -53,6 +53,8 @@ def expand(root: pathlib.Path, entries, knobs=None) -> Sources:
             continue
         if k == "path":
             p = e if isinstance(e, str) else e["path"]
+            if not (root / p).is_file():
+                raise Bad(f"XR-SRC-004 {p} 不在 {root} 下")
             out.add(root / p, p)
         elif k == "glob":
             ex = e.get("exclude") or []
@@ -91,7 +93,7 @@ def flist(path: pathlib.Path, env: dict, root: pathlib.Path, base: pathlib.Path,
     if path in seen:
         raise Bad(f"Flist {path} 嵌套成环")
     if not path.is_file():
-        raise Bad(f"Flist {path} 不存在")
+        raise Bad(f"XR-SRC-004 Flist {path} 不存在")
     seen = seen | {path}
     text = re.sub(r"//[^\n]*|^\s*#[^\n]*", "", path.read_text(), flags=re.M)
     toks = [_sub(t, env, path) for t in text.split()]

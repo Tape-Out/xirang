@@ -134,8 +134,14 @@ def _emit(pkg: Pkg) -> dict:
 
 
 def sources(pkg: Pkg, view: str = "rtl", knobs=None) -> Sources:
-    rtl, _, _ = _view(pkg, _emit(pkg), view)
-    return expand(pkg.root, rtl, knobs)
+    e = _emit(pkg)
+    rtl, _, _ = _view(pkg, e, view)
+    try:
+        return expand(pkg.root, rtl, knobs)
+    except Bad as ex:
+        if (s := e.get("setup")) and str(ex).startswith(("XR-SRC-001", "XR-SRC-004")):
+            raise Bad(f"{ex}——它是生成物，先跑 `ran run {pkg.name} {s}`") from None
+        raise
 
 
 def defines(pkg: Pkg, vals=None, view: str = "rtl", src: Sources | None = None) -> list[str]:

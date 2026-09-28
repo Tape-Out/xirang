@@ -562,7 +562,8 @@ class Pkg:
             if k not in ("path", "flist"):
                 continue
             f = f if isinstance(f, str) else f[k]
-            if f in made or (self.root / f).is_file():
+            # 写了 setup 的，缺的文件是它要生成的：跑 setup 本身要先读得了清单
+            if f in made or e.get("setup") or (self.root / f).is_file():
                 continue
             # 生成器类的上游：RTL 要先跑一遍对方的脚本才存在。
             # 报「树上没有」等于把人晾在那里，要说清先跑什么

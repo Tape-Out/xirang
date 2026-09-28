@@ -360,3 +360,5 @@ def _tar(ctx: Ctx) -> bytes:
 
 from . import ipxact as _ipxact   # noqa: E402,F401  注册用
 from . import rdl as _rdl         # noqa: E402,F401
+from . import svd as _svd         # noqa: E402,F401
+from . import dts as _dts         # noqa: E402,F401

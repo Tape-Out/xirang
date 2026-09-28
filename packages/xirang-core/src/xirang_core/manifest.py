@@ -93,7 +93,8 @@ TOP_KEYS = {*DIR_KEYS,
             "name", "version", "spec", "kind", "lang", "identity", "contract",
             "params", "features", "constraints", "area", "emit", "deps",
             "bus", "instances", "connect", "pipe", "test", "diagnostics",
-            "targets", "tasks", "guards", "profiles", "chip", "__path__"}
+            "targets", "tasks", "guards", "profiles", "chip", "dt", "__path__"}
+DT_KEYS = {"node", "compatible", "props", "size"}
 
 
 def slow_ctrl(emit: dict, vals) -> bool:
@@ -246,6 +247,7 @@ class Pkg:
 
     def _check(self):
         ip = self.ip
+        self._check_dt(ip.get("dt"))
         unknown = set(ip) - TOP_KEYS
         if unknown:
             raise Bad(f"{self.path}: 不认识的顶层键 {sorted(unknown)}")
@@ -544,6 +546,20 @@ class Pkg:
                               f"对不到它的端口上")
             return e
         return None
+
+    def _check_dt(self, dt) -> None:
+        if dt is None:
+            return
+        if not isinstance(dt, dict) or (bad := sorted(set(dt) - DT_KEYS)):
+            raise Bad(f"{self.path}: dt 只认 {sorted(DT_KEYS)}" + (f"，多了 {bad}" if dt else ""))
+        if not all(isinstance(c, str) for c in dt.get("compatible") or []):
+            raise Bad(f"{self.path}: dt.compatible 是字符串列表")
+        for p in dt.get("props") or []:
+            if not isinstance(p, dict) or "name" not in p or set(p) - {"name", "value", "when"}:
+                raise Bad(f"{self.path}: dt.props 每一条写 name，可带 value 与 when：{p}")
+        s = dt.get("size")
+        if isinstance(s, dict) and (set(s) - {"knob", "scale"} or "knob" not in s):
+            raise Bad(f"{self.path}: dt.size 写整数，或 {{knob: 旋钮, scale: 倍数}}")
 
     def _srcs(self, e: dict, fs, what: str, made: set, need: bool) -> None:
         from xirang_core import sources

@@ -3,6 +3,7 @@
 `uv run pytest tests/test_env.py`
 """
 import os
+import shutil
 
 import pytest
 
@@ -12,3 +13,8 @@ from xirang_back import sv
 @pytest.mark.skipif(not os.environ.get("CI"), reason="只在 CI 里要求")
 def test_pyslang_present():
     assert sv.available(), "uv sync 要带 --all-packages --all-extras"
+
+
+@pytest.mark.skipif(not os.environ.get("CI"), reason="只在 CI 里要求")
+def test_dtc_present():
+    assert shutil.which("dtc"), "设备树导出的判据要 dtc，CI 要装 device-tree-compiler"

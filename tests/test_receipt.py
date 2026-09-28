@@ -201,3 +201,23 @@ def test_translate_off_is_skipped_like_the_synthesis_path(tmp_path):
     assert foreign.receipt(pk, {"n": V(1)}) == []
     (tmp_path / "hw/top.sv").write_text(OFF.replace("// synthesis translate_off", ""))
     assert codes(foreign.receipt(Pkg(tmp_path), {"n": V(1)})) == ["slang:UndeclaredIdentifier"]
+
+
+VENDOR = """module top #(parameter int N = 1) (input logic clk, output logic [7:0] q);
+  xpm_memory_sdpram #(.MEMORY_SIZE(64)) u(.clka(clk), .doutb(q));
+endmodule
+"""
+
+
+def test_vendor_primitives_pass_as_black_boxes_when_allowed(tmp_path):
+    """nop-plus 生成的核例化 Xilinx 的 xpm_memory：没有源码，只能当黑盒。"""
+    pk = mk(tmp_path, {"hw/top.sv": VENDOR})
+    assert codes(foreign.receipt(pk, {"n": V(1)})) == ["slang:UnknownModule"]
+    pk = mk(tmp_path, {"hw/top.sv": VENDOR}, diagnostics={"allow": ["slang:UnknownModule"]})
+    got = foreign.receipt(pk, {"n": V(1)})
+    assert codes(got) == ["slang:UnknownModule"] and "--ignore-unknown-modules" in got[0][1]
+
+
+def test_relaxing_what_the_front_end_cannot_relax_is_refused(tmp_path):
+    with pytest.raises(Bad, match="XR-DIAG-001"):
+        mk(tmp_path, {"hw/top.sv": TOP}, diagnostics={"allow": ["slang:UndeclaredIdentifier"]})

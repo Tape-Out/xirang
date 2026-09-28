@@ -82,6 +82,8 @@ SLANG_COMPAT = {
     "UsedBeforeDeclared": "--allow-use-before-declare",
     "SysFuncHierarchicalNotAllowed": "--allow-hierarchical-const",
     "ConstEvalHierarchicalName": "--allow-hierarchical-const",
+    # 厂商原语（Xilinx 的 xpm_*、乘法器 IP）没有源码，当黑盒只核顶层
+    "UnknownModule": "--ignore-unknown-modules",
 }
 
 SUGAR = {"allow": "info", "warn": "warn", "deny": "error"}

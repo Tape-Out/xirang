@@ -234,7 +234,10 @@ def files(pkg: Pkg, view: str = "rtl", knobs=None) -> list[pathlib.Path]:
 
 
 def _flags(pkg: Pkg) -> list[str]:
-    return diag.slang_flags([("包 ip.yaml", pkg.ip.get("diagnostics"))])[0]
+    got = diag.slang_flags([("包 ip.yaml", pkg.ip.get("diagnostics"))])[0]
+    if _emit(pkg).get("unit") == "single":
+        got.append("--single-unit")
+    return got
 
 
 def _elab(pkg: Pkg, vals, params: dict, probes=()):

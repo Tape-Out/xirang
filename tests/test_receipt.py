@@ -28,7 +28,7 @@ endmodule
 """
 
 
-def mk(root: pathlib.Path, files: dict, diagnostics=None, rtl=None, **emit) -> Pkg:
+def mk(root: pathlib.Path, files: dict, diagnostics=None, rtl=None, top=None, **emit) -> Pkg:
     for f, text in files.items():
         (root / f).parent.mkdir(parents=True, exist_ok=True)
         (root / f).write_text(text, encoding="utf-8")
@@ -47,6 +47,7 @@ def mk(root: pathlib.Path, files: dict, diagnostics=None, rtl=None, **emit) -> P
                                "type": "Pins", "map": {"clk": "clk"}}], **emit}]}
     if diagnostics:
         ip["diagnostics"] = diagnostics
+    ip |= top or {}
     (root / "ip.yaml").write_text(yaml.safe_dump(ip, allow_unicode=True), encoding="utf-8")
     return Pkg(root)
 
@@ -126,3 +127,37 @@ def test_a_flist_macro_overridden_by_the_manifest_is_noted(tmp_path):
     pk = mk(tmp_path, files, rtl=["hw/top.sv", {"flist": "hw/all.f"}])
     assert foreign.defines(pk, {"n": V(2)}) == ["N_PORTS=2"]
     assert codes(foreign.receipt(pk, {"n": V(2)})) == ["XR-SRC-003"]
+
+
+UNIT = {"hw/c.sv": "parameter W = 4;\n",
+        "hw/top.sv": "module top #(parameter int N = 1) (input logic clk, input logic [W-1:0] x);\n"
+                     "endmodule\n"}
+
+
+def test_unit_scope_declarations_need_a_single_unit(tmp_path):
+    """VeriGPU 把位宽写在 $unit 层的 parameter 里，别的文件直接用。"""
+    pk = mk(tmp_path, UNIT, rtl=["hw/c.sv", "hw/top.sv"])
+    assert codes(foreign.receipt(pk, {"n": V(1)})) == ["slang:UndeclaredIdentifier"]
+    pk = mk(tmp_path, UNIT, rtl=["hw/c.sv", "hw/top.sv"], unit="single")
+    assert foreign.receipt(pk, {"n": V(1)}) == []
+    with pytest.raises(Bad, match="unit"):
+        mk(tmp_path, UNIT, rtl=["hw/c.sv", "hw/top.sv"], unit="many").foreign_emit()
+
+
+def test_an_upstream_test_can_be_a_task(tmp_path):
+    from xirang_flow import matrix
+    ok = {"tasks": {"t": "true"}, "test": {"upstream": [{"name": "u", "task": "t"}]}}
+    pk = mk(tmp_path, {"hw/top.sv": TOP}, top=ok)
+    rep = matrix.run(pk, {pk.name: pk}, out=tmp_path / "o")
+    assert rep.rows and all(r.mark.name == "ok" for r in rep.rows)
+    ok["tasks"]["t"] = "false"
+    pk = mk(tmp_path, {"hw/top.sv": TOP}, top=ok)
+    rep = matrix.run(pk, {pk.name: pk}, out=tmp_path / "o2")
+    assert any("XR-TASK-004" in r.note for r in rep.rows)
+    with pytest.raises(Bad, match="tasks 里没有"):
+        mk(tmp_path, {"hw/top.sv": TOP},
+           top={"test": {"upstream": [{"name": "u", "task": "nope"}]}})
+    with pytest.raises(Bad, match="不能再写"):
+        mk(tmp_path, {"hw/top.sv": TOP},
+           top={"tasks": {"t": "true"},
+                "test": {"upstream": [{"name": "u", "task": "t", "dut": "x"}]}})

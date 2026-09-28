@@ -23,6 +23,7 @@ from xirang_gen.regmap import generate as gen_regmap
 from xirang_gen.tb import regs_tb
 from xirang_gen.wrap import neutral
 
+from . import tasks
 from .logs import first_err, tail
 from .report import Mark, Matrix, Row
 
@@ -199,6 +200,14 @@ def run(pkg: Pkg, index: dict[str, Pkg], *, out: pathlib.Path,
                                  + " ".join(f"{k}={v}" for k, v in u["when"].items()) + "）")
                     continue
                 ran += 1
+                if u.get("task"):
+                    try:
+                        tasks.run(pkg, u["task"], vals, work / "up" / f"{u['name']}{lbl}",
+                                  secs=int(u.get("timeout", 1800)))
+                    except Bad as ex:
+                        bad = True
+                        notes.append(f"上游 {u['name']}：{ex}")
+                    continue
                 if u.get("params") or u.get("fixed"):
                     want = {p: knobs[k] for p, k in (u.get("params") or {}).items()
                             if k in knobs}

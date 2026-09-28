@@ -74,7 +74,9 @@ DRIVERS = {"regs", "flat", "bsv", "assembly", "library", "foreign", "none"}
 # 黑盒声明认的键。黑盒不解析源码，这份声明就是它的全部形状。
 FOREIGN_KEYS = {"kind", "lang", "top", "rtl", "sim", "views", "params", "defines",
                 "includes", "setup", "generate", "clock", "reset", "ports", "limits",
-                "receipt"}
+                "receipt", "unit"}
+# IEEE 1800 把「文件怎么组成编译单元」留给工具定：iverilog 全部并成一个，slang 一个文件一个
+UNITS = {"file", "single"}
 VIEW_KEYS = {"rtl", "defines", "includes", "replace"}
 EXPECT = {"eq", "ne", "ge", "le", "in"}
 PH = re.compile(r"\{\{\s*(\w+)\s*\}\}")
@@ -361,9 +363,18 @@ class Pkg:
     def _check_upstream(self):
         for t in self.upstream_tests():
             unknown = set(t) - {"name", "files", "dut", "params", "fixed",
-                                "plusargs", "expect", "timeout", "when"}
+                                "plusargs", "expect", "timeout", "when", "task"}
             if unknown:
                 raise Bad(f"{self.path}: test.upstream 有不认识的键 {sorted(unknown)}")
+            if "task" in t:
+                # 上游自己的测试脚本：退出码就是判据，测试台那几个键没有意义
+                if extra := sorted(set(t) - {"name", "task", "timeout", "when"}):
+                    raise Bad(f"{self.path}: test.upstream {t.get('name')} 写了 task，"
+                              f"就不能再写 {extra}")
+                if t["task"] not in (self.ip.get("tasks") or {}):
+                    raise Bad(f"{self.path}: test.upstream {t.get('name')} 指向任务 "
+                              f"{t['task']}，tasks 里没有")
+                continue
             for k in ("name", "files", "dut"):
                 if not t.get(k):
                     raise Bad(f"{self.path}: test.upstream 的每一项都要写 {k}")
@@ -454,6 +465,8 @@ class Pkg:
                           f"少一项就接不上：顶层名与文件给源码闭包，ports 给端口到端点的对应")
             if e["lang"] not in LANGS:
                 raise Bad(f"{self.path}: foreign 的 lang={e['lang']} 不认识")
+            if e.get("unit", "file") not in UNITS:
+                raise Bad(f"{self.path}: foreign 的 unit 只能是 {sorted(UNITS)}")
             # generate 的产物由息壤自己写出来，落盘之前它当然不在树上
             made = {g.get("out") for g in (e.get("generate") or [])}
             views = e.get("views") or {}

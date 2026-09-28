@@ -23,6 +23,7 @@ auto 派生出来的点若被约束判为不合法，跳过并说明；extra 里
       extra:
         - {mem.words: 4096, cpu.mul: false}
 """
+import hashlib
 import itertools
 
 from .manifest import Bad, Pkg
@@ -30,6 +31,7 @@ from .manifest import Bad, Pkg
 MODES = ("auto", "full", "none")
 TEST_KEYS = {"matrix", "extra", "skip", "unused", "noarea", "deadread", "upstream", "axes"}
 FULL_CAP = 64
+LABEL_CAP = 64
 
 
 def _tag(v) -> str:
@@ -42,8 +44,12 @@ def label(ov: dict) -> str:
     """点的名字要能当 BSV 包名后缀用，所以只留字母数字。"""
     if not ov:
         return "Default"
-    return "".join("".join(s[:1].upper() + s[1:] for s in k.split(".")) + _tag(v)
-                   for k, v in sorted(ov.items()))
+    s = "".join("".join(p[:1].upper() + p[1:] for p in k.split(".")) + _tag(v)
+                for k, v in sorted(ov.items()))
+    # 旋钮多的包（hazard3 三十一个）上下界那一点能拼出几百个字符，当目录名超过 255 字节
+    if len(s) <= LABEL_CAP:
+        return s
+    return s[:LABEL_CAP - 9] + "_" + hashlib.sha256(s.encode()).hexdigest()[:8]
 
 
 def _closure(knobs: dict, name: str) -> dict:

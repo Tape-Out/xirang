@@ -86,3 +86,12 @@ def test_dotted_keys_that_miss_an_instance_are_errors(tmp_path):
         resolve("top", [tmp_path])
     with pytest.raises(Bad, match="不是装配"):
         resolve("core", [tmp_path], over={"cpu.m": True})
+
+
+def test_long_labels_are_capped_but_stay_distinct():
+    from xirang_core.matrix import LABEL_CAP, label
+    a = {f"knob{i:02d}": True for i in range(31)}
+    b = {**a, "knob30": False}
+    assert len(label(a)) <= LABEL_CAP and len(label(b)) <= LABEL_CAP, "三十一个旋钮的上界当目录名超过 255 字节"
+    assert label(a) != label(b) and label(a) == label(dict(a))
+    assert label({"cpu.mul": False}) == "CpuMulOff", "短的照旧"

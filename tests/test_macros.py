@@ -89,7 +89,7 @@ def test_the_same_projection_feeds_the_upstream_generator(tmp_path):
     """一处定义两处使用：展开要它，上游自己的生成器也要它。"""
     pk = mk(tmp_path, {"VX_CFG_NUM_CORES": "cores", "VX_CFG_XLEN": 32})
     hole = tasks.holes(pk, {"cores": V(4)}, tmp_path / "build")
-    assert hole["defines"] == "-DVX_CFG_NUM_CORES=4 -DVX_CFG_XLEN=32"
+    assert tasks.fill("{{defines}}", hole, "x") == "-DVX_CFG_NUM_CORES=4 -DVX_CFG_XLEN=32"
     got = tasks.fill("gen --cflags=\"{{defines}}\"", hole, "setup")
     assert got == 'gen --cflags="-DVX_CFG_NUM_CORES=4 -DVX_CFG_XLEN=32"'
 

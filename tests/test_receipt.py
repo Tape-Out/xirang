@@ -161,3 +161,15 @@ def test_an_upstream_test_can_be_a_task(tmp_path):
         mk(tmp_path, {"hw/top.sv": TOP},
            top={"tasks": {"t": "true"},
                 "test": {"upstream": [{"name": "u", "task": "t", "dut": "x"}]}})
+
+
+def test_a_setup_task_runs_before_its_sources_exist(tmp_path):
+    """生成器类上游：glob 指向的文件要 setup 跑完才有，跑 setup 本身不能先要它们。"""
+    from xirang_flow import tasks
+    top = {"tasks": {"mk": "bash -c 'mkdir -p gen && touch gen/g.sv'"}}
+    pk = mk(tmp_path, {"hw/top.sv": TOP}, rtl=["hw/top.sv", {"glob": "gen/*.sv"}],
+            setup="mk", top=top)
+    with pytest.raises(Bad, match="XR-SRC-001"):
+        foreign.files(pk)
+    tasks.run(pk, "mk", {"n": V(1)}, tmp_path / "o")
+    assert [f.name for f in foreign.files(pk)] == ["top.sv", "g.sv"]

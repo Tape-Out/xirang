@@ -101,8 +101,11 @@ def plan(pkg: Pkg, name: str) -> list[str]:
     return order
 
 
-def holes(pkg: Pkg, vals, out) -> dict[str, str]:
-    """占位符只读，且只有这几个。给不了的就报错，不静默留原样。"""
+def holes(pkg: Pkg, vals, out) -> dict:
+    """占位符只读，且只有这几个。给不了的就报错，不静默留原样。
+
+    `defines` 用到才算：它要展开源码，而生成器类上游的 setup 任务跑之前源码还不存在。
+    """
     d = {"name": pkg.name, "root": str(pkg.root), "out": str(out)}
     for k, v in (vals or {}).items():
         d[f"knob.{k}"] = str(getattr(v, "value", v))
@@ -111,7 +114,7 @@ def holes(pkg: Pkg, vals, out) -> dict[str, str]:
     # 这样「配置从哪来」仍然只有一个源头——清单，而不是两处各写一遍
     from xirang_gen import foreign
     if pkg.foreign_emit() is not None:
-        d["defines"] = " ".join(f"-D{x}" for x in foreign.defines(pkg, vals))
+        d["defines"] = lambda: " ".join(f"-D{x}" for x in foreign.defines(pkg, vals))
     # 有些上游的配置改不了宏：CVA6 的字段全是 localparam，`-D` 碰不到它们，
     # 唯一的口子是它自己的 TARGET_CFG——换一个包。这类生成器要的是一份
     # 「解出来的配置」文件，不是一串 -D。落盘一次，把路径给它
@@ -131,7 +134,8 @@ def fill(cmd: str, hole: dict[str, str], who: str) -> str:
         if k not in hole:
             raise Bad(f"XR-TASK-003 任务 {who} 用了认不得的占位符 {{{{{k}}}}}"
                       f"（有 {', '.join(sorted(hole))}）")
-        return hole[k]
+        v = hole[k]
+        return v() if callable(v) else v
     return HOLE.sub(sub, cmd)
 
 

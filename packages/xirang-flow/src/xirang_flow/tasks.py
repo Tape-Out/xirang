@@ -30,7 +30,10 @@ from xirang_core.manifest import Bad, Pkg
 STAGES = ("check", "gen", "build", "test")
 KEYS = {"run", "needs", "env", "cwd", "desc"}
 NAME = re.compile(r"[a-z][a-z0-9-]*$")
-HOLE = re.compile(r"{{([a-z][a-z0-9_.]*)}}")
+# 旋钮名多是驼峰（numCores、fifoDepth）。原来只认小写，`{{knob.numCores}}` 对不上就原样
+# 留在命令里照跑；现在认驼峰，写得像占位符却对不上的一律报错
+HOLE = re.compile(r"{{\s*([a-z][A-Za-z0-9_.]*)\s*}}")
+LOOKS = re.compile(r"{{[^{}]*}}")
 
 
 def _one(name: str, spec) -> dict:
@@ -136,6 +139,10 @@ def fill(cmd: str, hole: dict[str, str], who: str) -> str:
                       f"（有 {', '.join(sorted(hole))}）")
         v = hole[k]
         return v() if callable(v) else v
+    for m in LOOKS.finditer(cmd):
+        if not HOLE.fullmatch(m.group(0)):
+            raise Bad(f"XR-TASK-003 任务 {who} 的 {m.group(0)} 不是合法的占位符"
+                      f"（名字以小写字母开头，只含字母、数字、下划线与点）")
     return HOLE.sub(sub, cmd)
 
 

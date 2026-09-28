@@ -92,6 +92,18 @@ def test_an_unknown_placeholder_is_refused(tmp_path):
         tasks.fill(tasks.all_of(pk)["a"]["run"], tasks.holes(pk, {}, tmp_path), "a")
 
 
+def test_camel_case_knobs_fill_and_malformed_placeholders_are_refused(tmp_path):
+    class V:
+        value = 4
+
+    hole = tasks.holes(mk(tmp_path, {"a": "true"}), {"numCores": V()}, tmp_path / "o")
+    assert tasks.fill("-P NUM_CORES={{knob.numCores}} {{ name }}", hole, "a") == "-P NUM_CORES=4 u", \
+        "驼峰名原来对不上正则，原样留在命令里照跑"
+    for bad in ("{{Name}}", "{{knob.num-cores}}", "{{}}"):
+        with pytest.raises(Bad, match="不是合法的占位符"):
+            tasks.fill(f"echo {bad}", hole, "a")
+
+
 def test_a_failing_task_is_reported_with_its_exit_code(tmp_path):
     pk = mk(tmp_path, {"a": "false"})
     with pytest.raises(Bad, match="XR-TASK-004"):

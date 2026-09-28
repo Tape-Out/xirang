@@ -184,7 +184,12 @@ def _find_pkg(name: str, search: list[pathlib.Path]) -> Pkg:
 
 def resolve(top: str, search: list[pathlib.Path],
             pdk: dict | None = None, cli: dict | None = None,
-            ws=None) -> Resolved:
+            ws=None, over: dict | None = None, over_from: str = "<覆盖>") -> Resolved:
+    """解出一颗装配。
+
+    `over` 是从根往下的点号键覆盖（`{"cpu.mul": False}`），像写在根之上的
+    又一层 `with:`，赢过实例自己的；装配矩阵的每一点就是这么进层叠的。
+    """
     root = _find_pkg(top, search)
     bus = root.ip.get("bus", "apb4")
     seed = root.chip()
@@ -192,6 +197,8 @@ def resolve(top: str, search: list[pathlib.Path],
         if k.startswith("chip."):
             seed[k[5:]] = v
     seed["__from__"] = f"{root.name} 的 chip"
+    if over and not root.is_assembly:
+        raise Bad(f"{top} 不是装配，点号键覆盖无处可落：{sorted(over)}")
     if not root.is_assembly:
         # 叶子当成「只有一个实例的装配」。不这么做，面板与四个导出对单个 IP
         # 全都打不开——而第三方要的正是单个 IP，不是整颗 SoC。
@@ -221,6 +228,9 @@ def resolve(top: str, search: list[pathlib.Path],
         out = []
         inherited = inherited or {}
         flow = flow if flow is not None else seed
+        names = {s.get("name") for s in pkg.ip.get("instances", []) or []}
+        if stray := sorted(set(inherited) - names):
+            raise Bad(f"{pkg.name} 没有实例 {stray}：点号键落不到实例上")
         for spec in pkg.ip.get("instances", []) or []:
             sub = _find_pkg(spec["of"], search)
             if sub.is_library:
@@ -265,7 +275,13 @@ def resolve(top: str, search: list[pathlib.Path],
             out.append(inst)
         return out
 
-    insts = build(root, 0)
+    top_down: dict = {}
+    for k, v in (over or {}).items():
+        head, dot, rest = k.partition(".")
+        if not dot:
+            raise Bad(f"{top}：覆盖 {k} 要写成 实例.旋钮")
+        top_down.setdefault(head, {})[rest] = (v, over_from)
+    insts = build(root, 0, top_down)
     _check_addr(insts)
     _check_guards(root, insts, search)
     return Resolved(top=top, bus=bus, instances=insts)

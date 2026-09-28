@@ -15,13 +15,20 @@
 
 auto 派生出来的点若被约束判为不合法，跳过并说明；extra 里手写的点不合法
 就是错误——那是人写错了，不是派生的副产品。
+
+装配自己没有旋钮，要写 `axes` 说扫哪几条，键是指到实例旋钮的点号键：
+
+    test:
+      axes: [cpu.mul, mem.words]
+      extra:
+        - {mem.words: 4096, cpu.mul: false}
 """
 import itertools
 
 from .manifest import Bad, Pkg
 
 MODES = ("auto", "full", "none")
-TEST_KEYS = {"matrix", "extra", "skip", "unused", "noarea", "deadread", "upstream"}
+TEST_KEYS = {"matrix", "extra", "skip", "unused", "noarea", "deadread", "upstream", "axes"}
 FULL_CAP = 64
 
 
@@ -35,7 +42,8 @@ def label(ov: dict) -> str:
     """点的名字要能当 BSV 包名后缀用，所以只留字母数字。"""
     if not ov:
         return "Default"
-    return "".join(k[:1].upper() + k[1:] + _tag(v) for k, v in sorted(ov.items()))
+    return "".join("".join(s[:1].upper() + s[1:] for s in k.split(".")) + _tag(v)
+                   for k, v in sorted(ov.items()))
 
 
 def _closure(knobs: dict, name: str) -> dict:
@@ -107,7 +115,34 @@ def _matches(skip: dict, ov: dict) -> bool:
     return all(k in ov and ov[k] == v for k, v in skip.items())
 
 
-def check(pkg: Pkg):
+def knob_at(pkg: Pkg, key: str, index: dict[str, Pkg]) -> dict:
+    """装配的点号键 `实例.旋钮`（装配套装配就接着点）落到哪个旋钮上。
+
+    返回那个旋钮的定义，`depends` 换成同一实例下的点号键，好让 `_closure`
+    照叶子的规矩把依赖一起打开。落不到就报错，不静默丢掉。
+    """
+    *path, k = key.split(".")
+    if not path:
+        raise Bad(f"{pkg.path}: {key} 要写成 实例.旋钮")
+    here = pkg
+    for name in path:
+        spec = next((s for s in here.ip.get("instances") or []
+                     if s.get("name") == name), None)
+        if spec is None:
+            raise Bad(f"{pkg.path}: {key} 里的 {name} 不是 {here.name} 的实例")
+        if spec["of"] not in index:
+            raise Bad(f"{pkg.path}: 找不到实例 {name} 的包 {spec['of']}")
+        here = index[spec["of"]]
+    knobs = here.knobs()
+    if k not in knobs:
+        raise Bad(f"{pkg.path}: {key} 里的 {k} 不是 {here.name} 的旋钮")
+    d = dict(knobs[k])
+    if d.get("depends"):
+        d["depends"] = [".".join(path) + "." + x for x in d["depends"]]
+    return d
+
+
+def check(pkg: Pkg, index: dict[str, Pkg] | None = None):
     """test 段的键必须都认识——写错的键会被默默忽略，那比报错糟得多。"""
     t = pkg.ip.get("test")
     if t is None:
@@ -121,6 +156,20 @@ def check(pkg: Pkg):
         raise Bad(f"{pkg.path}: test.matrix 只能是 {list(MODES)}")
     if not isinstance(t.get("unused", []), list):
         raise Bad(f"{pkg.path}: test.unused 应是列表")
+    if "axes" in t:
+        if not pkg.is_assembly:
+            raise Bad(f"{pkg.path}: test.axes 只给装配用，叶子的轴就是它全部的旋钮")
+        if not isinstance(t["axes"], list) or not all(isinstance(a, str) for a in t["axes"]):
+            raise Bad(f"{pkg.path}: test.axes 应是点号键的列表")
+    if pkg.is_assembly:
+        for key in ("extra", "skip"):
+            if any(not isinstance(pt, dict) for pt in t.get(key) or []):
+                raise Bad(f"{pkg.path}: test.{key} 的每一项都该是映射")
+        if index is not None:
+            for k in [*(t.get("axes") or []),
+                      *(k for key in ("extra", "skip") for pt in t.get(key) or [] for k in pt)]:
+                knob_at(pkg, k, index)
+        return
     knobs = pkg.knobs()
     for key in ("extra", "skip"):
         for pt in t.get(key) or []:
@@ -131,10 +180,12 @@ def check(pkg: Pkg):
                 raise Bad(f"{pkg.path}: test.{key} 提到没有的旋钮 {sorted(bad)}")
 
 
-def points(pkg: Pkg) -> list[tuple[str, dict, bool]]:
+def points(pkg: Pkg, index: dict[str, Pkg] | None = None) -> list[tuple[str, dict, bool]]:
     """返回 (名字, 旋钮覆盖, 是不是手写的)。手写的点不合法要报错，派生的可以跳过。"""
-    check(pkg)
+    check(pkg, index)
     t = pkg.ip.get("test") or {}
+    if pkg.is_assembly:
+        return _asm_points(pkg, t, index or {})
     knobs = pkg.knobs()
     mode = t.get("matrix", "auto")
     if not knobs or mode == "none":
@@ -175,6 +226,35 @@ def points(pkg: Pkg) -> list[tuple[str, dict, bool]]:
     return out
 
 
+def _asm_points(pkg: Pkg, t: dict, index: dict[str, Pkg]) -> list[tuple[str, dict, bool]]:
+    """装配的点：每条轴照叶子 auto 的规则取值。
+
+    守卫不在这里修：装配的守卫要看整棵实例树解出来的值，那是解析的事，
+    撞上的派生点由调用方标「略」。
+    """
+    knobs = {a: knob_at(pkg, a, index) for a in t.get("axes") or []}
+    mode = t.get("matrix", "auto")
+    if not knobs or mode == "none":
+        derived: list[dict] = [{}]
+    elif mode == "full":
+        derived = _full(knobs, pkg.name)
+    else:
+        derived = _auto(knobs)
+    skips = [dict(s) for s in (t.get("skip") or [])]
+    out: list[tuple[str, dict, bool]] = []
+    seen: set = set()
+    for ov, hand in ([(p, False) for p in derived]
+                     + [(dict(e), True) for e in (t.get("extra") or [])]):
+        if not hand and any(_matches(s, ov) for s in skips):
+            continue
+        key = tuple(sorted(ov.items(), key=lambda kv: kv[0]))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((label(ov), ov, hand))
+    return out
+
+
 _held: dict[str, list[tuple[str, str, str]]] = {}
 _fixed: dict[str, list[tuple[str, dict]]] = {}
 
@@ -201,13 +281,13 @@ def _repair(pkg, full: dict, varied: set, knobs: dict) -> tuple[dict, dict]:
 
 def adjusted(pkg) -> list[tuple[str, dict]]:
     """为了满足守卫被顺手改掉的联动字段：(点名, 改成什么)。"""
-    if pkg.path not in _fixed:
+    if pkg.path not in _fixed and not pkg.is_assembly:
         points(pkg)
-    return _fixed[pkg.path]
+    return _fixed.get(pkg.path, [])
 
 
 def withheld(pkg) -> list[tuple[str, str, str]]:
     """守卫挡下来、没有进矩阵的点：(点名, 旋钮, 为什么)。"""
-    if pkg.path not in _held:
+    if pkg.path not in _held and not pkg.is_assembly:
         points(pkg)
-    return _held[pkg.path]
+    return _held.get(pkg.path, [])

@@ -582,7 +582,7 @@ def cmd_build(args) -> int:
 
 
 def cmd_test(args) -> int:
-    """把一个包验一遍。库包跑行为测试，装配过调度门禁，叶子走整张矩阵。"""
+    """把一个包验一遍。库包跑行为测试，叶子与装配走矩阵。"""
     index = find.index(find.roots(args.path))
     if args.top not in index:
         raise Bad(f"找不到包 {args.top}")
@@ -603,22 +603,10 @@ def cmd_test(args) -> int:
 
     if pkg.is_assembly:
         rep = gate.assembly(pkg, index, find.roots(args.path),
-                            out=out, clean=args.clean)
-        print(f"{BOLD}{pkg.name}{OFF}  装配调度门禁与自检（默认那一点）")
-        if rep.ok:
-            print(f"  ✔ {rep.top}")
-            for r in rep.rows:
-                print(f"  {r.mark if r.mark is Mark.ok else BOLD + r.mark + OFF}"
-                      f" {r.label}  {r.note}")
-            return rep.rc
-        print(f"  {BOLD}✘{OFF} {rep.top}  "
-              f"{' '.join(rep.hits) if rep.hits else '编译失败'}")
-        for ln in rep.lines:
-            print(f"      {ln}")
-        return rep.rc
-
-    rep = matrix.run(pkg, index, out=out, clean=args.clean,
-                     point=args.point, self_tb=not args.no_self)
+                            out=out, clean=args.clean, point=args.point)
+    else:
+        rep = matrix.run(pkg, index, out=out, clean=args.clean,
+                         point=args.point, self_tb=not args.no_self)
     for q in rep.problems:
         print(f"  {BOLD}✘{OFF} {q}")
     if rep.problems:

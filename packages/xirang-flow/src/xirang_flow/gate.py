@@ -3,21 +3,22 @@
 它们都要「先解析、再生成、再交给外部工具、再看结果」——跨了 core / gen / back
 三个包，所以升到编排这一层，而不是挂在其中任何一个身上。
 """
+import json
 import pathlib
 import shutil
 import subprocess
 import sys
 
 from xirang_back.sim import schedule, sim
-from xirang_core.manifest import GEN_HW, GEN_SW, GEN_TEST, Pkg
+from xirang_core.manifest import GEN_HW, GEN_SW, GEN_TEST, Bad, Pkg
 from xirang_core.matrix import points
 from xirang_core.resolve import resolve, resolve_pkg
 from xirang_gen.assemble import assemble
 from xirang_gen.regmap import generate as gen_regmap
 
-from .logs import tail
+from .logs import first_err, tail
 from .matrix import run_gens
-from .report import Gate, Lib, Mark, Row
+from .report import Lib, Mark, Matrix, Row
 
 
 def _fresh(out: pathlib.Path, clean: bool) -> None:
@@ -26,44 +27,90 @@ def _fresh(out: pathlib.Path, clean: bool) -> None:
 
 
 def assembly(pkg: Pkg, index: dict[str, Pkg], roots: list[pathlib.Path], *,
-             out: pathlib.Path, clean: bool = False) -> Gate:
-    """装配的调度门禁：默认那一点生成到 Verilog，看 G 编号。
+             out: pathlib.Path, clean: bool = False, point: str | None = None) -> Matrix:
+    """装配的矩阵：每一点生成到 Verilog 看 G 编号，再跑装配自己的测试台。
 
-    矩阵不做——那是各实例矩阵的乘积，怎么取样才不爆炸还没想清楚。但默认
-    那一点必须过：`plic` 的完成规则单独综合时调度干净，接进 SoC 就与总线
-    方法首尾相接、被整条丢掉（G0021）。这一类只在装配一级才现形。
+    默认那一点必须过：`plic` 的完成规则单独综合时调度干净，接进 SoC 就与总线
+    方法首尾相接、被整条丢掉（G0021）。这一类只在装配一级才现形。别的点照
+    `test.axes` 派生，没写就只有默认那一点。
     """
     _fresh(out, clean)
-    (out / GEN_HW).mkdir(parents=True, exist_ok=True)
-    (out / "sw").mkdir(parents=True, exist_ok=True)
-    res = resolve(pkg.name, roots, cli={})
-    pkgs = {n: index[n] for n in {i.of for _, i in res.walk()} if n in index}
-    pkgs |= index
-    for name in sorted({i.of for _, i in res.walk()}):
-        if pkgs[name].regmap:
-            gen_regmap(pkgs[name], out / GEN_HW, out / GEN_SW)
-    top_mod = "".join(w.capitalize()
-                      for w in res.top.replace("-", "_").split("_"))
-    src = out / GEN_HW / f"{top_mod}Pkg.bsv"
-    src.write_text(assemble(res, pkgs, top_mod), encoding="utf-8")
-    dirs = [str(out / GEN_HW)]
-    dirs += [str(d) for q in index.values() for d in q.dirs("hwsrc")]
-    work = out / "b"
-    work.mkdir(parents=True, exist_ok=True)
-    ok, hits, log = schedule(f"mk{top_mod}", src, ":".join(dirs) + ":+", work)
-    lines = [] if ok else [
-        ln.strip() for ln in log.splitlines()
-        if any(g in ln for g in hits) or ln.startswith("Error")]
-    rows = _self_tests(pkg, out, dirs) if ok else []
-    return Gate(top=f"mk{top_mod}", ok=ok, hits=list(hits), lines=lines, rows=rows)
+    rep = Matrix(name=pkg.name)
+    pts = points(pkg, index)
+    if point:
+        pts = [x for x in pts if x[0] == point]
+        if not pts:
+            raise Bad(f"矩阵里没有叫 {point} 的点")
+    rep.points = len(pts)
+    regs = out / GEN_HW
+    regs.mkdir(parents=True, exist_ok=True)
+    (out / GEN_SW).mkdir(parents=True, exist_ok=True)
+    top_mod = "".join(w.capitalize() for w in pkg.name.replace("-", "_").split("_"))
+    srcs = [str(d) for q in index.values() for d in q.dirs("hwsrc")]
+    made: set[str] = set()
+    seen: dict[tuple, str] = {}
+    for lbl, ov, hand in pts:
+        try:
+            res = resolve(pkg.name, roots, cli={}, over=ov, over_from=f"测试点 {lbl}")
+        except Bad as ex:
+            # 派生出来的点撞上守卫是意料之中；手写的点撞上就是人写错了
+            if hand:
+                raise
+            rep.rows.append(Row(lbl, Mark.skip, f"约束不允许：{ex}"))
+            continue
+        flat = _dotted(res)
+        key = tuple(sorted((k, repr(v)) for k, v in flat.items()))
+        if key in seen:
+            rep.rows.append(Row(lbl, Mark.same, f"解析下来与 {seen[key]} 是同一点"))
+            continue
+        seen[key] = lbl
+        for name in sorted({i.of for _, i in res.walk()} - made):
+            if index[name].regmap:
+                gen_regmap(index[name], regs, out / GEN_SW)
+            made.add(name)
+        here = out / lbl
+        hw = here / GEN_HW
+        hw.mkdir(parents=True, exist_ok=True)
+        src = hw / f"{top_mod}Pkg.bsv"
+        src.write_text(assemble(res, index, top_mod), encoding="utf-8")
+        dirs = [str(hw), str(regs), *srcs]
+        (here / "b").mkdir(parents=True, exist_ok=True)
+        ok, hits, log = schedule(f"mk{top_mod}", src, ":".join(dirs) + ":+", here / "b")
+        did, notes = ["调度"], []
+        if not ok:
+            notes.append("调度：" + (",".join(hits) if hits else first_err(log)))
+        else:
+            rows = _self_tests(pkg, here, dirs, lbl, flat)
+            if rows:
+                did.append(f"自检 {len(rows)} 个")
+            notes += [f"{r.label}：{r.note}" for r in rows if r.mark is Mark.bad]
+        ks = " ".join(f"{k}={v}" for k, v in sorted(ov.items()))
+        rep.rows.append(Row(lbl, Mark.bad if notes else Mark.ok,
+                            "；".join(notes) if notes else
+                            " · ".join(x for x in (ks, "跑了" + "、".join(did)) if x)))
+    return rep
 
 
-def _self_tests(pkg: Pkg, out: pathlib.Path, dirs: list[str]) -> list[Row]:
+def _dotted(res) -> dict[str, object]:
+    """整棵实例树的取值，键是点号路径：生成脚本拿它改期望。"""
+    out: dict[str, object] = {}
+
+    def rec(insts, pre):
+        for i in insts:
+            for k, v in i.values.items():
+                out[f"{pre}{i.name}.{k}"] = v.value
+            rec(i.children, f"{pre}{i.name}.")
+    rec(res.instances, "")
+    return out
+
+
+def _self_tests(pkg: Pkg, out: pathlib.Path, dirs: list[str], lbl: str,
+                knobs: dict[str, object]) -> list[Row]:
     """装配自带的测试台：先跑 `htest/mk*.py` 生成，再逐个编译运行。
 
-    组织流水线一直在跑这一步，本地 `ran test` 原来只到调度门禁为止，于是一处
-    只有自检看得见的错（比如核读错了自己的 hartid）本地全绿，要推上去才现形。
-    生成物写进测试输出目录，不碰包自己的 `htest/`。
+    生成脚本收到这一点的 `{label, knobs}`，与叶子同一个约定。测试台逐字节相同
+    也照跑：被测的是这一点生成的 SoC，不是测试台。生成物写进这一点的输出目录，
+    不碰包自己的 `htest/`。
     """
     tb = next((x for x in pkg.dirs("htest") if x.is_dir()), pkg.root / GEN_TEST)
     gens = sorted(tb.glob("mk*.py")) if tb.is_dir() else []
@@ -71,12 +118,13 @@ def _self_tests(pkg: Pkg, out: pathlib.Path, dirs: list[str]) -> list[Row]:
         return []
     dest = out / GEN_TEST
     dest.mkdir(parents=True, exist_ok=True)
+    arg = json.dumps({"label": lbl, "knobs": knobs}, ensure_ascii=False)
     for g in gens:
-        r = subprocess.run([sys.executable, str(g), str(dest)], cwd=tb,
+        r = subprocess.run([sys.executable, str(g), str(dest), arg], cwd=tb,
                            capture_output=True, text=True, timeout=300)
         if r.returncode:
-            tail = (r.stdout + r.stderr).strip().splitlines()
-            return [Row(label=g.name, mark=Mark.bad, note=tail[-1] if tail else "生成失败")]
+            tail_ = (r.stdout + r.stderr).strip().splitlines()
+            return [Row(label=g.name, mark=Mark.bad, note=tail_[-1] if tail_ else "生成失败")]
     path = ":".join([*dirs, str(dest), str(tb), "+"])
     rows = []
     for f in sorted(dest.glob("*Tb.bsv")):

@@ -136,10 +136,11 @@ def run(pkg: Pkg, index: dict[str, Pkg], *, out: pathlib.Path,
         knobs = {k: v.value for k, v in vals.items()}
         notes: list[str] = []
         bad = False
-        ran = 0
+        # 报出每一点实际跑了什么：只打一个勾看不出是核过了还是什么都没跑
+        did: list[str] = []
 
         if has_bsv:
-            ran += 1
+            did.append("调度")
             f = out / GEN_HW / f"{cap}Bare{lbl}.bsv"
             f.write_text(neutral(pkg, vals, lbl), encoding="utf-8")
             nums = [str(vals[k].value) for k, d in pkg.knobs().items()
@@ -153,7 +154,7 @@ def run(pkg: Pkg, index: dict[str, Pkg], *, out: pathlib.Path,
                                          else first_err(log)))
 
         if pkg.regmap:
-            ran += 1
+            did.append("寄存器")
             txt = regs_tb(pkg, vals, lbl)
             if txt:
                 f = out / GEN_HW / f"{cap}RegsTb{lbl}.bsv"
@@ -176,7 +177,9 @@ def run(pkg: Pkg, index: dict[str, Pkg], *, out: pathlib.Path,
                 else:
                     tbseen[dg] = lbl
                     path = ":".join([str(out / GEN_HW), str(d), *src]) + ":+"
-                    for f in sorted(d.glob("*Tb.bsv")):
+                    tbs = sorted(d.glob("*Tb.bsv"))
+                    did.append(f"行为测试 {len(tbs)} 个")
+                    for f in tbs:
                         ok, o = sim(f"mk{f.stem}", f, path, work)
                         if not ok:
                             bad = True
@@ -184,7 +187,7 @@ def run(pkg: Pkg, index: dict[str, Pkg], *, out: pathlib.Path,
 
         # 黑盒：先证明这一组参数展开得开——参数之间有依赖，某些组合上游本来就不支持
         if pkg.foreign_emit():
-            ran += 1
+            did.append("展开")
             for err in foreign.elaborates(pkg, vals):
                 bad = True
                 notes.append("展开：" + err)
@@ -199,7 +202,7 @@ def run(pkg: Pkg, index: dict[str, Pkg], *, out: pathlib.Path,
                     notes.append(f"上游 {u['name']}：这一档不适用（要 "
                                  + " ".join(f"{k}={v}" for k, v in u["when"].items()) + "）")
                     continue
-                ran += 1
+                did.append(f"上游 {u['name']}")
                 if u.get("task"):
                     try:
                         tasks.run(pkg, u["task"], vals, work / "up" / f"{u['name']}{lbl}",
@@ -225,10 +228,11 @@ def run(pkg: Pkg, index: dict[str, Pkg], *, out: pathlib.Path,
                     bad = True
                     notes.append(f"上游 {u['name']}：" + tail(o))
 
-        if not ran:
+        if not did:
             # 什么都没跑却报绿，比报红还糟——那是在骗人
             notes.append("这个包既没有实现也没有寄存器图，没有可跑的检查")
+        ks = " ".join(f"{k}={v}" for k, v in sorted(knobs.items()))
         rep.rows.append(Row(lbl, Mark.bad if bad else Mark.ok,
                             "；".join(notes) if notes else
-                            " ".join(f"{k}={v}" for k, v in sorted(knobs.items()))))
+                            " · ".join(x for x in (ks, "跑了" + "、".join(did) if did else "") if x)))
     return rep

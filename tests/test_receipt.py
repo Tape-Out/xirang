@@ -150,6 +150,7 @@ def test_an_upstream_test_can_be_a_task(tmp_path):
     pk = mk(tmp_path, {"hw/top.sv": TOP}, top=ok)
     rep = matrix.run(pk, {pk.name: pk}, out=tmp_path / "o")
     assert rep.rows and all(r.mark.name == "ok" for r in rep.rows)
+    assert all("跑了展开、上游 u" in r.note for r in rep.rows), "只打勾不说跑了什么，没跑也看不出来"
     ok["tasks"]["t"] = "false"
     pk = mk(tmp_path, {"hw/top.sv": TOP}, top=ok)
     rep = matrix.run(pk, {pk.name: pk}, out=tmp_path / "o2")

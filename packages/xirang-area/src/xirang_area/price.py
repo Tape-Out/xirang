@@ -304,8 +304,13 @@ def gen_digest(pkg: Pkg) -> str | None:
 
 
 def stale(pkg: Pkg) -> str | None:
-    """价目表是不是对着另一份生成产物量的。是的话它已经悄悄失效了。"""
-    c = (pkg.ip.get("area") or {}).get("corner") or {}
+    """价目表是不是对着另一份生成产物量的。是的话它已经悄悄失效了。
+
+    没有价目表不归这里管：那是 XR-AREA-006，面积未知，只报不挡。
+    """
+    if not pkg.ip.get("area"):
+        return None
+    c = pkg.ip["area"].get("corner") or {}
     now = gen_digest(pkg)
     if now is None:
         return None       # 既没有寄存器图也没有源码，没什么可摘要的

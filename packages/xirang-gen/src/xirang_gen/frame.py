@@ -20,10 +20,6 @@ class Slot:
     o: tuple[str, int] | None = None
     oe: tuple[str, int] | None = None
 
-    def signal(self) -> str:
-        refs = [r for r in (self.i, self.o, self.oe) if r]
-        return " / ".join(f"{p}[{b}]" for p, b in refs)
-
 
 @dataclasses.dataclass
 class Plan:
@@ -221,5 +217,8 @@ def render(pl: Plan, top: str, core: str, ports, width: int = WIDTH) -> str:
 
 
 def table(pl: Plan) -> list[dict]:
-    """给报告的位表：每一位的方向与接到哪。"""
-    return [{"bit": s.bit, "kind": s.kind, "signal": s.signal()} for s in pl.slots]
+    """给报告的位表：每一位的方向，以及输入、输出、使能各接设计的哪一位。"""
+    def ref(r):
+        return f"{r[0]}[{r[1]}]" if r else None
+    return [{"bit": s.bit, "kind": s.kind, "in": ref(s.i), "out": ref(s.o), "oe": ref(s.oe)}
+            for s in pl.slots]

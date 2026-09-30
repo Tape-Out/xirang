@@ -131,6 +131,9 @@ def run(pkg: Pkg, res: Resolved, pkgs: dict[str, Pkg], out: pathlib.Path,
     flow = flow or spec["flow"]
     top = spec["top"]
     if out.exists():
+        # 只清上一次 asic 留下的目录：-o 写错成别的目录，不能把它整个删了
+        if any(out.iterdir()) and not (out / "report.json").is_file():
+            raise Bad(f"XR-ASIC-005 {out} 不是空的，也不是上一次 ran asic 的输出，不动它")
         shutil.rmtree(out)
     work = out / "core"
     work.mkdir(parents=True)

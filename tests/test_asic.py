@@ -86,11 +86,13 @@ def pl(spec=SPEC, ports=PORTS):
 
 
 def test_plan_places_in_order():
-    got = {s.bit: (s.kind, s.signal()) for s in pl().slots}
-    assert got[0] == ("in", "a[0]") and got[1] == ("in", "a[1]")
-    assert [got[b][0] for b in (2, 3, 4)] == ["io"] * 3
-    assert got[5] == ("od", "d_i[0] / d_pull[0]")
-    assert got[10] == ("out", "b[0]")
+    got = {r["bit"]: r for r in frame.table(pl())}
+    assert got[0] == {"bit": 0, "kind": "in", "in": "a[0]", "out": None, "oe": None}
+    assert got[1]["in"] == "a[1]"
+    assert [got[b]["kind"] for b in (2, 3, 4)] == ["io"] * 3
+    assert got[3] == {"bit": 3, "kind": "io", "in": "c_i[1]", "out": "c_o[1]", "oe": "c_oe[1]"}
+    assert got[5] == {"bit": 5, "kind": "od", "in": "d_i[0]", "out": None, "oe": "d_pull[0]"}
+    assert got[10]["kind"] == "out" and got[10]["out"] == "b[0]"
     assert sorted(got) == [0, 1, 2, 3, 4, 5, 10]
 
 
@@ -352,3 +354,13 @@ def test_assembly_runs_task_tests(tmp_path):
     did = []
     bad = _task_tests(pk, tmp_path / "o", "Default", {"x.n": 1}, did)
     assert did == ["a", "b"] and len(bad) == 1 and bad[0].startswith("b：")
+
+
+def test_refuses_foreign_out_dir(tmp_path):
+    from xirang_flow import asic
+    (tmp_path / "o").mkdir()
+    (tmp_path / "o" / "keep.txt").write_text("mine")
+    pk = put(tmp_path, "t", asic={"mhz": 50})
+    with pytest.raises(Bad, match="不动它"):
+        asic.run(pk, None, {}, tmp_path / "o")
+    assert (tmp_path / "o" / "keep.txt").is_file()

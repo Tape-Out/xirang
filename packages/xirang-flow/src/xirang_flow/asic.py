@@ -28,6 +28,7 @@ from . import tasks
 
 # bsc 的库模块与生成物里的 initial 块只给仿真填初值，流片的触发器没有初值
 BSC_DEFINES = ("BSV_NO_INITIAL_BLOCKS",)
+MARK = ".ran-asic"
 
 
 def _mod(name: str) -> str:
@@ -133,11 +134,13 @@ def run(pkg: Pkg, res: Resolved, pkgs: dict[str, Pkg], out: pathlib.Path,
     top = spec["top"]
     if out.exists():
         # 只清上一次 asic 留下的目录：-o 写错成别的目录，不能把它整个删了
-        if any(out.iterdir()) and not (out / "report.json").is_file():
-            raise Bad(f"XR-ASIC-005 {out} 不是空的，也不是上一次 ran asic 的输出，不动它")
+        # 开跑先放标记：半路失败留下的目录没有 report.json，下次也认得出是自己的
+        if any(out.iterdir()) and not (out / MARK).is_file():
+            raise Bad(f"XR-ASIC-005 {out} 不是空的，也不是 ran asic 的输出，不动它")
         shutil.rmtree(out)
     work = out / "core"
     work.mkdir(parents=True)
+    (out / MARK).write_text("ran asic\n", encoding="utf-8")
 
     cp = pkgs[res.top]
     if cp.is_assembly:

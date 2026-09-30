@@ -370,3 +370,17 @@ def test_refuses_foreign_out_dir(tmp_path):
     with pytest.raises(Bad, match="不动它"):
         asic.run(pk, None, {}, tmp_path / "o")
     assert (tmp_path / "o" / "keep.txt").is_file()
+
+
+def test_readmem_files_follow_their_source(tmp_path):
+    from xirang_back.verilog import readmem
+    (tmp_path / "src/rom").mkdir(parents=True)
+    (tmp_path / "src/rom/rom.v").write_text('module rom; initial $readmemb("font.bin", m); endmodule\n')
+    (tmp_path / "src/rom/font.bin").write_text("0101\n")
+    (tmp_path / "work").mkdir()
+    got = readmem([tmp_path / "src/rom/rom.v"], [], tmp_path / "work")
+    assert got == [tmp_path / "work/font.bin"] and got[0].read_text() == "0101\n"
+    (tmp_path / "src/rom/font.bin").unlink()
+    (tmp_path / "work/font.bin").unlink()
+    with pytest.raises(ToolError, match="font.bin"):
+        readmem([tmp_path / "src/rom/rom.v"], [], tmp_path / "work")

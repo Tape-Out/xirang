@@ -231,6 +231,16 @@ def _reprobe(pkg: Pkg, doc, area, probe, path, Y, apply: bool, say) -> list[str]
     d = pathlib.Path(tempfile.mkdtemp(prefix="xirang-probe-"))
     try:
         (d / GEN_HW).mkdir()
+        # 探针 import 的配置包（amba 的 AmbaCfg）是测试生成器按旋钮现写的，先照默认值跑一遍
+        from xirang_core.resolve import resolve_pkg
+        knobs = {k: v.value for k, v in resolve_pkg(pkg, {}, "probe", None, {}).items()}
+        arg = json.dumps({"label": "", "knobs": knobs}, ensure_ascii=False)
+        for tb in pkg.dirs("htest"):
+            for g in sorted(tb.glob("mk*.py")):
+                r = subprocess.run([sys.executable, str(g), str(d / GEN_HW), arg],
+                                   cwd=str(g.parent), capture_output=True, text=True)
+                if r.returncode != 0:
+                    raise Bad(f"{pkg.name} 的 {g.name} 没跑成：{(r.stdout + r.stderr)[-600:]}")
         srcs = [str(x) for x in pkg.dirs("hwsrc")]
         for dep in (doc.get("deps") or {}):
             # 依赖在同级目录下，这里拿不到它的 Pkg，所以只能按约定找。

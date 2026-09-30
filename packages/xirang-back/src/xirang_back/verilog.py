@@ -69,6 +69,7 @@ def elaborate(files, top: str, params: dict, out: pathlib.Path,
     here = root
     # 按模块名找文件（`-y`）yosys 的 read_verilog 不认，sv2v 认
     if libdirs or any(str(f).endswith(".sv") for f in files):
+        readmem(files, includes, out.parent)
         files, cut, extra = strip_sim(files, out.parent / "_synth")
         if cut:
             print(f"  抹掉 {cut} 段 translate_off（上游标明不进综合）")
@@ -97,6 +98,33 @@ def elaborate(files, top: str, params: dict, out: pathlib.Path,
     if left:
         raise ToolError(f"展开后仍有 {len(left)} 处 parameter，后端会把它们当默认值：{left[:3]}")
     return out
+
+READMEM = re.compile(r"""\$readmem[bh]\s*\(\s*"([^"]+)\"""")
+
+
+def readmem(files, includes, cwd: pathlib.Path) -> list[pathlib.Path]:
+    """`$readmemb("font.bin")` 的相对路径由 yosys 按它的工作目录找，而上游是把数据文件
+    放在引用它的源文件旁边的。按「源文件所在目录、再 include 目录」找到，链进工作目录。"""
+    got = []
+    for f in files:
+        f = pathlib.Path(f)
+        try:
+            txt = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for name in READMEM.findall(txt):
+            p = pathlib.Path(name)
+            if p.is_absolute() or (cwd / p).exists():
+                continue
+            src = next((d / p for d in [f.parent, *map(pathlib.Path, includes)]
+                        if (d / p).is_file()), None)
+            if src is None:
+                raise ToolError(f"{f.name} 要读 {name}，源文件旁边与 include 目录里都没有")
+            (cwd / p).parent.mkdir(parents=True, exist_ok=True)
+            (cwd / p).symlink_to(src.resolve())
+            got.append(cwd / p)
+    return got
+
 
 def schematic(files, top: str, params: dict, out: pathlib.Path,
               flat: bool = False) -> pathlib.Path:

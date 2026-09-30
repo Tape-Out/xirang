@@ -669,6 +669,38 @@ def cmd_status(args) -> int:
     return 1 if problems else 0
 
 
+def cmd_asic(args) -> int:
+    """流片交付：一个 .v、ecc 的结果、流片说明要的 report.json。"""
+    from xirang_flow import asic
+    res, pkgs = _resolve(args)
+    pkg = pkgs[res.top]
+    out = pathlib.Path(args.out or pathlib.Path("build") / "asic" / pkg.name).resolve()
+    doc = asic.run(pkg, res, pkgs, out, mhz=args.mhz, flow=args.flow, go=not args.no_run,
+                   extra=args.bsv_path or [])
+    print(f"{BOLD}{doc['top']}.v{OFF}  {out / (doc['top'] + '.v')}")
+    print(f"  {doc['rtl']['modules']} 个模块 · {doc['frame']} · {doc['mhz']} MHz · {doc['flow']}")
+    if p := doc.get("pads"):
+        print(f"  payload 用了 {p['used']}/{p['width']} 位，接成常量 {len(p['tie'])} 个，"
+              f"不出芯片 {len(p['unused'])} 个")
+    dirty = [s["pkg"] for s in doc["sources"] if s.get("dirty")]
+    if dirty:
+        print(f"  {DIM}有未提交改动的仓：{' '.join(dirty)}（报告里的提交号对不上交付的源码）{OFF}")
+    if args.no_run:
+        print("  (--no-run，只出 .v 与 ecc.toml)")
+        return 0
+    e = doc["ecc"]
+    t = e.get("timing") or {}
+    s = t.get("setup") or {}
+    print(f"  单元 {e.get('cells')} · 面积 {e.get('area_um2')} µm² · "
+          f"WNS {s.get('wns')} ns · 估计 {s.get('frequency_mhz')} MHz（{t.get('step')}）")
+    stop = False
+    for g in doc["gate"]:
+        print(f"  {'✘' if g['blocks'] else '!'} {g['code']} {g['what']}")
+        stop |= g["blocks"]
+    print(f"  报告 {out / 'report.json'}")
+    return 1 if stop else 0
+
+
 def main(argv=None) -> int:
     # 长命令 xirang、短命令 ran 是同一个入口，用哪个名字调就报哪个名字
     ap = argparse.ArgumentParser(prog=pathlib.Path(sys.argv[0]).name or "xirang",
@@ -775,6 +807,16 @@ def main(argv=None) -> int:
     b.add_argument("--init", action="store_true",
                    help="没有价目表的新包：按量程两端与默认值生成实测行，量完用离格点定余量")
     b.set_defaults(fn=cmd_recal)
+
+    a = sub.add_parser("asic", help="流片交付：展平成一个 .v、套顶层契约、跑 ecc、出报告")
+    common(a)
+    a.add_argument("-o", "--out", help="默认 build/asic/<包>")
+    a.add_argument("--mhz", type=float, help="覆盖清单里的目标主频")
+    a.add_argument("--flow", choices=["syn_sta", "rtl2gds", "harden", "rcx"],
+                   help="覆盖清单里的 ecc 预设")
+    a.add_argument("--no-run", action="store_true", help="只出 .v 与 ecc.toml，不跑 ecc")
+    a.add_argument("--bsv-path", action="append", help="额外的 BSV 源目录")
+    a.set_defaults(fn=cmd_asic)
 
     b = sub.add_parser("build", help="生成并综合")
     common(b)

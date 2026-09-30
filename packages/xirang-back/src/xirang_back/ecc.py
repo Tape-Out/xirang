@@ -115,17 +115,25 @@ def _pull_bsc_libs(rtl: pathlib.Path):
             break
 
 
+def rtl(out: pathlib.Path, top: str, src_dirs: list[str], gen: str = "hwsrc",
+        top_src: pathlib.Path | None = None) -> pathlib.Path | None:
+    """bsc 编出 Verilog，补齐它引用的库模块，写一份文件表。"""
+    d = bsv_to_verilog(out, top, src_dirs, gen, top_src)
+    if d is None:
+        return None
+    _pull_bsc_libs(d)
+    (d / "files.f").write_text("\n".join(sorted(p.name for p in d.glob("*.v"))) + "\n")
+    return d
+
+
 def synth(out: pathlib.Path, top: str, name: str,
           extra_src: list[str] | None = None,
           top_src: pathlib.Path | None = None,
           gen: str = "hwsrc") -> float | None:
     """`gen` 是生成产物在 out 下的目录名。由调用方给——这一层只驱动外部工具，
     不认识我们的数据模型（test_structure 守的就是这条）。"""
-    rtl = bsv_to_verilog(out, top, extra_src or [], gen, top_src)
-    if rtl is None:
+    if rtl(out, top, extra_src or [], gen, top_src) is None:
         return None
-    _pull_bsc_libs(rtl)
-    (rtl / "files.f").write_text("\n".join(sorted(p.name for p in rtl.glob("*.v"))) + "\n")
     if (pdk := pdk_root()) is None:
         print("找不到 PDK：设 XR_PDK_ROOT，或让 ecc 装进 "
               "~/.local/share/ecc/pdks/<名>/<版本>")

@@ -26,9 +26,11 @@ def _lit(v) -> str:
 
 
 def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
-    if res.bus not in BUSES:
-        raise Bad(f"本版装配只支持 {sorted(BUSES)}，收到 {res.bus}")
-    bus = BUSES[res.bus]
+    # none：片外没有总线口，片上总线只由片内的发起方驱动（无核交换机靠 SPI 从口桥管理）
+    ext = res.bus != "none"
+    if ext and res.bus not in BUSES:
+        raise Bad(f"本版装配只支持 {sorted(BUSES)} 与 none，收到 {res.bus}")
+    bus = BUSES.get(res.bus)
     root = pkgs[res.top]
     ctrl = (root.ip.get("contract") or {}).get("ctrl") or {}
     aw, dw = ctrl.get("aw", 32), ctrl.get("dw", 32)
@@ -184,13 +186,16 @@ def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
     mkfab = (f"  RegTarget#({aw}, {dw}) fab <- mkFabricT(devs, slowv);" if ks
              else f"  RegIf#({aw}, {dw}) fab <- mkFabric(devs);")
     m = len(mgrs)
+    if not m and not ext:
+        raise Bad(f"{res.top} 写了 bus: none，片上却没有发起方——地址图上的设备谁也访问不到")
+    extmgr = [f"  Apb4Manager#({aw}, {dw}) extbus <- mkApb4Manager;"] if ext else []
+    if m and ext:
+        mgrs.append("extbus.mgr")
+        m += 1
     if m and ks:
         # 会停顿的织体：仲裁住在 hwcore 的 mkArb 里，不在这里铺开。
         # 生成的顶层里不该有四十行自有 RTL——那既没人测，也违背「零自有 RTL」。
-        mgrs.append("extbus.mgr")
-        m += 1
-        fabric = [mkfab,
-                  f"  Apb4Manager#({aw}, {dw}) extbus <- mkApb4Manager;",
+        fabric = [mkfab, *extmgr,
                   f"  Vector#({m}, RegManager#({aw}, {dw})) mgrs = newVector;"]
         fabric += [f"  mgrs[{i2}] = {g};" for i2, g in enumerate(mgrs)]
         fabric += ["  Empty arb <- mkArb(mgrs, fab);"]
@@ -206,10 +211,7 @@ def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
         # 外部总线不再走零等待的绑定器：它在方法里直接调 access，而那个方法
         # 是 always_enabled 的，会把仲裁规则永久挡住。改用会等待的那个，
         # 外部口于是变成第 m 个发起方，与片内的一视同仁。
-        mgrs.append("extbus.mgr")
-        m += 1
-        fabric = [mkfab,
-                  f"  Apb4Manager#({aw}, {dw}) extbus <- mkApb4Manager;",
+        fabric = [mkfab, *extmgr,
                   f"  Reg#(Bit#(TLog#(TAdd#({m}, 1)))) turn <- mkReg(0);",
                   f"  Vector#({m}, Wire#(Bool)) gnt <- replicateM(mkDWire(False));",
                   f"  Vector#({m}, Wire#(RegRsp#({dw}))) mrsp <- replicateM(",
@@ -263,11 +265,11 @@ def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
         "import Vector::*;",
         "import RegIf::*;",
         "import Fabric::*;",
-        f"import {bus['pkg']}::*;",
+        *([f"import {bus['pkg']}::*;"] if ext else []),
         *imports,
         "",
         f"interface {top_module}Ifc;",
-        f"  interface {bus['pins']}#({aw}, {dw}) bus;",
+        *([f"  interface {bus['pins']}#({aw}, {dw}) bus;"] if ext else []),
         *pins_if,
         *irq_if,
         "endinterface",
@@ -289,7 +291,7 @@ def assemble(res: Resolved, pkgs: dict[str, Pkg], top_module: str) -> str:
         *([""] if irq_decl else []),
         # 规则要在方法与子接口之前：BSV 规定它们必须在块末（P0032）
         *wires,
-        f"  interface bus = {'extbus.pins' if mgrs else 'sl'};",
+        *([f"  interface bus = {'extbus.pins' if mgrs else 'sl'};"] if ext else []),
         *pins_impl,
         *irq_impl,
         "endmodule",

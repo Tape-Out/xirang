@@ -93,7 +93,12 @@ TOP_KEYS = {*DIR_KEYS,
             "name", "version", "spec", "kind", "lang", "identity", "contract",
             "params", "features", "constraints", "area", "emit", "deps",
             "bus", "instances", "connect", "pipe", "test", "diagnostics",
-            "targets", "tasks", "guards", "profiles", "chip", "dt", "__path__"}
+            "targets", "tasks", "guards", "profiles", "chip", "dt", "asic",
+            "__path__"}
+ASIC_KEYS = {"top", "frame", "mhz", "flow", "clock", "pads", "tie", "unused"}
+ASIC_FRAMES = {"mpc", "none"}
+# 与 xirang_back.asic.FLOWS 同一张表；core 不能 import back，test_asic 核两边一致
+ASIC_FLOWS = ("syn_sta", "rtl2gds", "harden", "rcx")
 DT_KEYS = {"node", "compatible", "props", "size"}
 
 
@@ -320,6 +325,7 @@ class Pkg:
         self.foreign_emit()
         self._check_targets()
         self._check_upstream()
+        self.asic()
 
         # 检查号与级别写错了要当场报：写错一个号，那道门禁的覆盖就静默失效
         over = ip.get("diagnostics") or {}
@@ -449,6 +455,53 @@ class Pkg:
                                           for e in self.ip.get("emit", []) or []):
                 raise Bad(f"{self.path}: 目标 {name} 说自己是 foreign，"
                           f"但 emit 里没有 foreign 段")
+
+    def asic(self) -> dict | None:
+        """`asic:` 段补齐默认值后的样子。只有要流片的包写它，没写返回 None。"""
+        a = self.ip.get("asic")
+        if a is None:
+            return None
+        if not isinstance(a, dict):
+            raise Bad(f"{self.path}: asic 是一张表")
+        unknown = set(a) - ASIC_KEYS
+        if unknown:
+            raise Bad(f"{self.path}: asic 有不认识的键 {sorted(unknown)}")
+        out = {"top": a.get("top") or self.name.replace("-", "_"),
+               "frame": a.get("frame", "mpc"), "mhz": a.get("mhz"),
+               "flow": a.get("flow", "syn_sta"), "clock": a.get("clock"),
+               "pads": a.get("pads") or [], "tie": a.get("tie") or {},
+               "unused": a.get("unused") or []}
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", str(out["top"])):
+            raise Bad(f"{self.path}: asic.top 要是合法的 Verilog 名字，收到 {out['top']!r}")
+        if out["frame"] not in ASIC_FRAMES:
+            raise Bad(f"{self.path}: asic.frame 只有 {sorted(ASIC_FRAMES)}，收到 {out['frame']!r}")
+        m = out["mhz"]
+        if isinstance(m, bool) or not isinstance(m, (int, float)) or not 0 < m <= 2000:
+            raise Bad(f"{self.path}: asic.mhz 要写目标主频（MHz，正数），收到 {m!r}")
+        if out["flow"] not in ASIC_FLOWS:
+            raise Bad(f"{self.path}: asic.flow 是 ecc 的预设，只有 {list(ASIC_FLOWS)}，"
+                      f"收到 {out['flow']!r}")
+        if out["frame"] == "none":
+            if out["pads"] or out["tie"] or out["unused"]:
+                raise Bad(f"{self.path}: frame: none 时设计的端口原样当芯片端口，"
+                          f"不写 pads、tie、unused")
+        elif out["clock"] is not None:
+            raise Bad(f"{self.path}: frame: mpc 的时钟固定叫 clock，不写 asic.clock")
+        if not isinstance(out["pads"], list):
+            raise Bad(f"{self.path}: asic.pads 是列表")
+        for k, e in enumerate(out["pads"]):
+            if isinstance(e, str):
+                continue
+            if not isinstance(e, dict) or set(e) - {"port", "in", "out", "oe", "at"}:
+                raise Bad(f"{self.path}: asic.pads 第 {k + 1} 条只认 port、in、out、oe、at")
+            if ("port" in e) == bool({"in", "out", "oe"} & set(e)):
+                raise Bad(f"{self.path}: asic.pads 第 {k + 1} 条要么写 port，要么写三态组 in/out/oe")
+            at = e.get("at")
+            if at is not None and (isinstance(at, bool) or not isinstance(at, int) or at < 0):
+                raise Bad(f"{self.path}: asic.pads 第 {k + 1} 条的 at 要是非负整数")
+        if not isinstance(out["tie"], dict) or not isinstance(out["unused"], list):
+            raise Bad(f"{self.path}: asic.tie 是「端口 -> 常量」的表，asic.unused 是端口列表")
+        return out
 
     def foreign_emit(self) -> dict | None:
         """`kind: foreign` 的 emit 段。我们自己写的包没有这一段，返回 None。

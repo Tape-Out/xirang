@@ -7,7 +7,7 @@ name = "xirang-flow"
 version = "0.1.0"
 description = "XiRang orchestration: build a leaf, gate an assembly, run a matrix"
 requires-python = ">=3.14"
-dependencies = ['xirang-core', 'xirang-gen', 'xirang-area', 'xirang-back']
+dependencies = ['xirang-core', 'xirang-gen', 'xirang-area', 'xirang-back', 'xirang-out']
 
 [tool.setuptools.packages.find]
 where = ["src"]

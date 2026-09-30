@@ -23,6 +23,7 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 
 from xirang_core.manifest import Bad, Pkg
 
@@ -162,6 +163,8 @@ def run(pkg: Pkg, name: str, vals, out, dry: bool = False,
             done.append((step, cmd))
             continue
         env = dict(os.environ)
+        # 任务里要回头调息壤（整片测试先 ran asic 出 .v）就用它：同一个解释器、同一份包
+        env.setdefault("XIRANG", f"{sys.executable} -m xirang.cli")
         env.update({k: fill(str(v), hole, step) for k, v in (t.get("env") or {}).items()})
         cwd = pkg.root / fill(t.get("cwd") or ".", hole, step)
         try:

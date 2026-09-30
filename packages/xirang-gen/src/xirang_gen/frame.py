@@ -197,6 +197,7 @@ def render(pl: Plan, top: str, core: str, ports, width: int = WIDTH) -> str:
     for n in driven:
         w = by[n].width
         L.append(f"  wire {'' if w == 1 else f'[{w - 1}:0] '}w_{n};")
+    # 不再同步 reset：FrameTop 的 FrameDesignControl 已按时钟放开它（两拍 release_count）
     conns = [f"    .{pl.clock}(clock)",
              f"    .{pl.reset}({'~reset' if pl.reset_low else 'reset'})"]
     for p in ports:

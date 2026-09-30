@@ -16,6 +16,7 @@ from xirang_core.resolve import resolve, resolve_pkg
 from xirang_gen.assemble import assemble
 from xirang_gen.regmap import generate as gen_regmap
 
+from . import tasks
 from .logs import first_err, tail
 from .matrix import run_gens
 from .report import Lib, Mark, Matrix, Row
@@ -84,11 +85,34 @@ def assembly(pkg: Pkg, index: dict[str, Pkg], roots: list[pathlib.Path], *,
             if rows:
                 did.append(f"自检 {len(rows)} 个")
             notes += [f"{r.label}：{r.note}" for r in rows if r.mark is Mark.bad]
+            notes += _task_tests(pkg, here, lbl, flat, did)
         ks = " ".join(f"{k}={v}" for k, v in sorted(ov.items()))
         rep.rows.append(Row(lbl, Mark.bad if notes else Mark.ok,
                             "；".join(notes) if notes else
                             " · ".join(x for x in (ks, "跑了" + "、".join(did)) if x)))
     return rep
+
+
+def _task_tests(pkg: Pkg, here: pathlib.Path, lbl: str, flat: dict,
+                did: list[str]) -> list[str]:
+    """装配写的任务形式的测试：整片测试要在交付的那份 Verilog 上跑，不在 BSV 里跑。
+
+    退出码就是判据。取值按点号路径给占位符（`{{knob.sw0.ports}}`）。
+    """
+    bad = []
+    for u in pkg.upstream_tests():
+        if not u.get("task"):
+            bad.append(f"{u.get('name')}：装配的 test.upstream 只认任务形式")
+            continue
+        if any(flat.get(k) != v for k, v in (u.get("when") or {}).items()):
+            continue
+        did.append(u["name"])
+        try:
+            tasks.run(pkg, u["task"], flat, here / "up" / u["name"],
+                      secs=int(u.get("timeout", 1800)))
+        except Bad as ex:
+            bad.append(f"{u['name']}：{ex}")
+    return bad
 
 
 def _dotted(res) -> dict[str, object]:

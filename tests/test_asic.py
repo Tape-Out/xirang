@@ -334,3 +334,21 @@ def test_bus_none_needs_a_manager(tmp_path):
     res, pkgs = tree(tmp_path, "none", managers=False)
     with pytest.raises(Bad, match="bus: none"):
         assemble(res, pkgs, "Soc")
+
+
+# ---------------------------------------------------------------- 整片测试任务
+
+def test_task_sees_xirang(tmp_path):
+    from xirang_flow import tasks
+    pk = put(tmp_path, "t", tasks={"env": 'sh -c "test -n \\"$XIRANG\\""'})
+    assert tasks.run(pk, "env", {}, tmp_path / "o")[0][1].startswith("过了")
+
+
+def test_assembly_runs_task_tests(tmp_path):
+    from xirang_flow.gate import _task_tests
+    pk = put(tmp_path, "soc", tasks={"ok": "true", "no": "false"},
+             test={"upstream": [{"name": "a", "task": "ok"}, {"name": "b", "task": "no"},
+                                {"name": "c", "task": "no", "when": {"x.n": 2}}]})
+    did = []
+    bad = _task_tests(pk, tmp_path / "o", "Default", {"x.n": 1}, did)
+    assert did == ["a", "b"] and len(bad) == 1 and bad[0].startswith("b：")

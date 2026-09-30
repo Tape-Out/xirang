@@ -6,6 +6,7 @@
 `uv run pytest tests/test_tasks.py`
 """
 import pathlib
+import time
 
 import pytest
 import yaml
@@ -108,6 +109,35 @@ def test_a_failing_task_is_reported_with_its_exit_code(tmp_path):
     pk = mk(tmp_path, {"a": "false"})
     with pytest.raises(Bad, match="XR-TASK-004"):
         tasks.run(pk, "a", {}, tmp_path)
+
+
+def test_a_task_declares_its_own_time_limit(tmp_path):
+    pk = mk(tmp_path, {"a": {"run": "sleep 5", "timeout": 1}})
+    with pytest.raises(Bad, match="超过 1 秒"):
+        tasks.run(pk, "a", {}, tmp_path)
+    pk = mk(tmp_path, {"a": {"run": "sleep 5", "timeout": 100}})
+    with pytest.raises(Bad, match="超过 1 秒"):
+        tasks.run(pk, "a", {}, tmp_path, secs=1)
+    for bad in ("10", 0, 1.5, True):
+        pk = mk(tmp_path, {"a": {"run": "true", "timeout": bad}})
+        with pytest.raises(Bad, match="XR-TASK-003"):
+            tasks.run(pk, "a", {}, tmp_path)
+
+
+def test_a_timed_out_task_takes_its_children_with_it(tmp_path):
+    pid = tmp_path / "pid"
+    pk = mk(tmp_path, {"a": {"run": f'bash -c "sleep 30 & echo $! > {pid}; wait"', "timeout": 1}})
+    t0 = time.monotonic()
+    with pytest.raises(Bad, match="超过 1 秒"):
+        tasks.run(pk, "a", {}, tmp_path)
+    assert time.monotonic() - t0 < 10, "孙进程握着输出管道，只停子进程就要等它自己退出"
+    stat = pathlib.Path(f"/proc/{pid.read_text().strip()}/stat")
+    for _ in range(50):
+        if not stat.exists() or stat.read_text().split()[2] == "Z":
+            break
+        time.sleep(0.1)
+    else:
+        pytest.fail("任务超时后它起的 sleep 还在跑")
 
 
 def test_a_missing_program_is_named(tmp_path):

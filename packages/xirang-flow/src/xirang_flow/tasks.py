@@ -22,6 +22,7 @@ import json
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 
@@ -29,7 +30,8 @@ from xirang_core.manifest import Bad, Pkg
 
 # 内建阶段：任务可以要求它们先发生，但我们不在这里替它们跑
 STAGES = ("check", "gen", "build", "test")
-KEYS = {"run", "needs", "env", "cwd", "desc"}
+KEYS = {"run", "needs", "env", "cwd", "desc", "timeout"}
+SECS = 1800
 NAME = re.compile(r"[a-z][a-z0-9-]*$")
 # 旋钮名多是驼峰（numCores、fifoDepth）。原来只认小写，`{{knob.numCores}}` 对不上就原样
 # 留在命令里照跑；现在认驼峰，写得像占位符却对不上的一律报错
@@ -48,6 +50,9 @@ def _one(name: str, spec) -> dict:
                   f"（认 {sorted(KEYS)}）")
     if not spec.get("run"):
         raise Bad(f"XR-TASK-003 任务 {name} 没写 run")
+    t = spec.get("timeout")
+    if t is not None and (type(t) is not int or t <= 0):
+        raise Bad(f"XR-TASK-003 任务 {name} 的 timeout 要写成正整数秒，写的是 {t!r}")
     return dict(spec)
 
 
@@ -148,8 +153,11 @@ def fill(cmd: str, hole: dict[str, str], who: str) -> str:
 
 
 def run(pkg: Pkg, name: str, vals, out, dry: bool = False,
-        secs: int = 1800) -> list[tuple[str, str]]:
-    """跑任务。返回 [(名字, 结果)]，`dry` 只打印不跑。"""
+        secs: int | None = None) -> list[tuple[str, str]]:
+    """跑任务。返回 [(名字, 结果)]，`dry` 只打印不跑。
+
+    时限：调用方给的（`test.upstream` 那一条的 timeout）优先，其次任务自己的，都没有是 1800 秒。
+    """
     got = all_of(pkg)
     hole = holes(pkg, vals, out)
     done = []
@@ -167,19 +175,29 @@ def run(pkg: Pkg, name: str, vals, out, dry: bool = False,
         env.setdefault("XIRANG", f"{sys.executable} -m xirang.cli")
         env.update({k: fill(str(v), hole, step) for k, v in (t.get("env") or {}).items()})
         cwd = pkg.root / fill(t.get("cwd") or ".", hole, step)
+        lim = secs or t.get("timeout") or SECS
         try:
-            r = subprocess.run(shlex.split(cmd), cwd=str(cwd), env=env,
-                               capture_output=True, text=True, errors="replace",
-                               timeout=secs)
+            # 自成一个进程组：超时要连它底下的 make、仿真器一起停。只停它自己的话，那些进程
+            # 成了孤儿接着跑，还握着输出管道，communicate 要等它们自己退出
+            p = subprocess.Popen(shlex.split(cmd), cwd=str(cwd), env=env,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 text=True, errors="replace", start_new_session=True)
         except FileNotFoundError as e:
             raise Bad(f"XR-TASK-004 任务 {step} 要的程序不在：{e.filename}") from None
+        try:
+            so, se = p.communicate(timeout=lim)
         except subprocess.TimeoutExpired:
-            raise Bad(f"XR-TASK-004 任务 {step} 超过 {secs} 秒还没结束") from None
-        if r.returncode != 0:
-            tail = (r.stderr or r.stdout or "").strip().splitlines()[-8:]
-            raise Bad(f"XR-TASK-004 任务 {step} 退出码 {r.returncode}："
+            if hasattr(os, "killpg"):
+                os.killpg(p.pid, signal.SIGKILL)
+            else:
+                p.kill()
+            p.communicate()
+            raise Bad(f"XR-TASK-004 任务 {step} 超过 {lim} 秒还没结束") from None
+        if p.returncode != 0:
+            tail = (se or so or "").strip().splitlines()[-8:]
+            raise Bad(f"XR-TASK-004 任务 {step} 退出码 {p.returncode}："
                       + chr(10) + chr(10).join(tail))
-        done.append((step, f"过了（{len(r.stdout.splitlines())} 行输出）"))
+        done.append((step, f"过了（{len(so.splitlines())} 行输出）"))
     return done
 
 

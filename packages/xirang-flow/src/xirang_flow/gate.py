@@ -109,7 +109,7 @@ def _task_tests(pkg: Pkg, here: pathlib.Path, lbl: str, flat: dict,
         did.append(u["name"])
         try:
             tasks.run(pkg, u["task"], flat, here / "up" / u["name"],
-                      secs=int(u.get("timeout", 1800)))
+                      secs=u.get("timeout"))
         except Bad as ex:
             bad.append(f"{u['name']}：{ex}")
     return bad

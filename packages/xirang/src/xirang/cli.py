@@ -674,6 +674,11 @@ def cmd_asic(args) -> int:
     from xirang_flow import asic
     res, pkgs = _resolve(args)
     pkg = pkgs[res.top]
+    spec = pkg.asic()
+    if spec and spec["core"]:
+        # 交付的是另一个包：旋钮覆盖作用在它身上，流片这一层只管顶层、位表与主频
+        args.top = spec["core"]
+        res, pkgs = _resolve(args)
     out = pathlib.Path(args.out or pathlib.Path("build") / "asic" / pkg.name).resolve()
     doc = asic.run(pkg, res, pkgs, out, mhz=args.mhz, flow=args.flow, go=not args.no_run,
                    extra=args.bsv_path or [])

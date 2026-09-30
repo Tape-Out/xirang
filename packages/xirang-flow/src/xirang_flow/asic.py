@@ -124,6 +124,7 @@ def gate(pkg: Pkg, rep: dict) -> list[tuple[str, str, bool]]:
 def run(pkg: Pkg, res: Resolved, pkgs: dict[str, Pkg], out: pathlib.Path,
         mhz: float | None = None, flow: str | None = None, go: bool = True,
         extra=()) -> dict:
+    """`res` 是交付的那个包解出来的：清单写了 `asic.core` 就是它，否则是 `pkg` 自己。"""
     spec = pkg.asic()
     if spec is None:
         raise Bad(f"XR-ASIC-001 {pkg.name} 没有 asic 段：流片顶层、主频与 ecc 预设都写在那里")
@@ -138,12 +139,13 @@ def run(pkg: Pkg, res: Resolved, pkgs: dict[str, Pkg], out: pathlib.Path,
     work = out / "core"
     work.mkdir(parents=True)
 
-    if pkg.is_assembly:
+    cp = pkgs[res.top]
+    if cp.is_assembly:
         core = core_asm(res, pkgs, work, extra)
-    elif pkg.foreign_emit() is not None:
-        core = core_foreign(pkg, res.instances[0].values, work)
+    elif cp.foreign_emit() is not None:
+        core = core_foreign(cp, res.instances[0].values, work)
     else:
-        raise Bad(f"XR-SPEC-001 {pkg.name} 是叶子 IP：本版 asic 只收装配与黑盒，"
+        raise Bad(f"XR-SPEC-001 {cp.name} 是叶子 IP：本版 asic 只收装配与黑盒，"
                   f"叶子先套一层装配")
 
     mpc = spec["frame"] == "mpc"
@@ -159,7 +161,8 @@ def run(pkg: Pkg, res: Resolved, pkgs: dict[str, Pkg], out: pathlib.Path,
     except ToolError as ex:
         raise Bad(f"XR-ASIC-005 {ex}") from None
 
-    doc = {"design": pkg.name, "top": top, "frame": spec["frame"], "mhz": mhz, "flow": flow,
+    doc = {"design": pkg.name, "delivers": cp.name, "top": top, "frame": spec["frame"],
+           "mhz": mhz, "flow": flow,
            "generated": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
            "core": {"module": core_top, "from": core["top"], "clock": core["clock"],
                     "reset": core["reset"], "reset_active": "low" if core["low"] else "high"}}
@@ -182,7 +185,8 @@ def run(pkg: Pkg, res: Resolved, pkgs: dict[str, Pkg], out: pathlib.Path,
 
     doc["config"] = config_rows(res)
     doc["resolved"] = to_doc(res)
-    doc["sources"] = prov.sources(closure(pkg, pkgs) | {pkg.name}, pkgs)
+    doc["sources"] = prov.sources(closure(pkg, pkgs) | closure(cp, pkgs) | {pkg.name, cp.name},
+                                  pkgs)
     doc["toolchain"] = _toolchain()
 
     if (pdk := ecc.pdk_root()) is not None:

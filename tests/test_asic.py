@@ -58,10 +58,16 @@ def test_asic_defaults(tmp_path):
     {"mhz": 50, "pads": [{"port": "a", "side": 1}]},
     {"mhz": 50, "frame": "none", "pads": ["a"]},
     {"mhz": 50, "clock": "clk"},
+    {"mhz": 50, "core": "nosuch"},
+    {"mhz": 50, "core": 3},
 ])
 def test_asic_refuses(tmp_path, bad):
     with pytest.raises(Bad):
         put(tmp_path, "t", asic=bad)
+
+
+def test_core_must_be_a_dep(tmp_path):
+    assert put(tmp_path, "t", deps={"x": "^0.1"}, asic={"mhz": 50, "core": "x"}).asic()["core"] == "x"
 
 
 def test_flow_tables_agree():

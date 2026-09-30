@@ -95,7 +95,7 @@ TOP_KEYS = {*DIR_KEYS,
             "bus", "instances", "connect", "pipe", "test", "diagnostics",
             "targets", "tasks", "guards", "profiles", "chip", "dt", "asic",
             "__path__"}
-ASIC_KEYS = {"top", "frame", "mhz", "flow", "clock", "pads", "tie", "unused"}
+ASIC_KEYS = {"core", "top", "frame", "mhz", "flow", "clock", "pads", "tie", "unused"}
 ASIC_FRAMES = {"mpc", "none"}
 # 与 xirang_back.asic.FLOWS 同一张表；core 不能 import back，test_asic 核两边一致
 ASIC_FLOWS = ("syn_sta", "rtl2gds", "harden", "rcx")
@@ -466,11 +466,15 @@ class Pkg:
         unknown = set(a) - ASIC_KEYS
         if unknown:
             raise Bad(f"{self.path}: asic 有不认识的键 {sorted(unknown)}")
-        out = {"top": a.get("top") or self.name.replace("-", "_"),
+        out = {"core": a.get("core"), "top": a.get("top") or self.name.replace("-", "_"),
                "frame": a.get("frame", "mpc"), "mhz": a.get("mhz"),
                "flow": a.get("flow", "syn_sta"), "clock": a.get("clock"),
                "pads": a.get("pads") or [], "tie": a.get("tie") or {},
                "unused": a.get("unused") or []}
+        # 交付别的包（一个黑盒、一颗现成的装配）时写 core；它得在 deps 里，CI 才取得到
+        if out["core"] is not None and (not isinstance(out["core"], str)
+                                        or out["core"] not in (self.ip.get("deps") or {})):
+            raise Bad(f"{self.path}: asic.core 是交付的那个包，要写进 deps，收到 {out['core']!r}")
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", str(out["top"])):
             raise Bad(f"{self.path}: asic.top 要是合法的 Verilog 名字，收到 {out['top']!r}")
         if out["frame"] not in ASIC_FRAMES:

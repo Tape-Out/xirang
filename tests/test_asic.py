@@ -352,6 +352,19 @@ def test_task_sees_xirang(tmp_path):
     assert tasks.run(pk, "env", {}, tmp_path / "o")[0][1].startswith("过了")
 
 
+def test_xirang_in_a_task_keeps_the_search_path(tmp_path):
+    """CI 里依赖克隆在别处：任务回调时要是按仓的上一级去找，就找不到它们。"""
+    import os
+    from xirang.cli import main
+    ws, out = tmp_path / "ws", tmp_path / "o"
+    ws.mkdir()
+    put(ws, "t", tasks={"env": f'sh -c "echo $XIRANG > {tmp_path}/got"'})
+    assert "XIRANG" not in os.environ
+    assert main(["-p", str(ws), "run", "t", "env", "-o", str(out)]) == 0
+    assert f"-p {ws.resolve()}" in (tmp_path / "got").read_text()
+    assert "XIRANG" not in os.environ, "只在这一次调用里生效，不留给同一进程里的下一次"
+
+
 def test_assembly_runs_task_tests(tmp_path):
     from xirang_flow.gate import _task_tests
     pk = put(tmp_path, "soc", tasks={"ok": "true", "no": "false"},

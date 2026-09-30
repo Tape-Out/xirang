@@ -5,7 +5,9 @@
 import argparse
 import json
 import difflib
+import os
 import pathlib
+import shlex
 import sys
 
 import yaml
@@ -836,6 +838,13 @@ def main(argv=None) -> int:
     b.set_defaults(fn=cmd_build)
 
     args = ap.parse_args(argv)
+    # 任务里回调息壤（整片测试先 ran asic 出 .v）要看到同一个工作区，所以带上这次的搜索路径。
+    # 外层已经定过的不改：任务里再起的息壤仍指回最外层那次
+    mine = "XIRANG" not in os.environ
+    if mine:
+        os.environ["XIRANG"] = shlex.join(
+            [sys.executable, "-m", "xirang.cli"]
+            + [x for r in find.roots(args.path) for x in ("-p", str(r))])
     try:
         if fl := getattr(args, "flist", None):
             miss = [f for f in fl if not pathlib.Path(f).is_file()]
@@ -846,6 +855,9 @@ def main(argv=None) -> int:
     except Bad as ex:
         print(f"xirang: {ex}", file=sys.stderr)
         return 1
+    finally:
+        if mine:
+            del os.environ["XIRANG"]
 
 
 if __name__ == "__main__":

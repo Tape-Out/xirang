@@ -140,6 +140,23 @@ def test_a_timed_out_task_takes_its_children_with_it(tmp_path):
         pytest.fail("任务超时后它起的 sleep 还在跑")
 
 
+def test_a_dependency_root_comes_from_the_workspace(tmp_path):
+    dep = mk(tmp_path / "elsewhere" / "ttsky25a-tinyqv", {})
+    pk = mk(tmp_path / "me", {"a": "echo {{dep.ttsky25a-tinyqv}}"})
+    ip = yaml.safe_load((pk.root / "ip.yaml").read_text(encoding="utf-8"))
+    ip["deps"] = {"ttsky25a-tinyqv": "^0.1"}
+    (pk.root / "ip.yaml").write_text(yaml.safe_dump(ip), encoding="utf-8")
+    pk = Pkg(pk.root)
+    got = tasks.run(pk, "a", {}, tmp_path, dry=True, pkgs={"ttsky25a-tinyqv": dep})
+    assert got[0][1] == f"echo {dep.root}", "按工作区找，不按本仓的邻居找"
+    with pytest.raises(Bad, match="工作区里没有包"):
+        tasks.run(pk, "a", {}, tmp_path, dry=True, pkgs={})
+    ip["tasks"] = {"a": "echo {{dep.hwcore}}"}
+    (pk.root / "ip.yaml").write_text(yaml.safe_dump(ip), encoding="utf-8")
+    with pytest.raises(Bad, match="XR-TASK-003"):
+        tasks.run(Pkg(pk.root), "a", {}, tmp_path, dry=True, pkgs={"hwcore": dep})
+
+
 def test_a_missing_program_is_named(tmp_path):
     pk = mk(tmp_path, {"a": "definitely-not-a-program-xyz"})
     with pytest.raises(Bad, match="XR-TASK-004"):

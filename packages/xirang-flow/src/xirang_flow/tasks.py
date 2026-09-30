@@ -35,7 +35,8 @@ SECS = 1800
 NAME = re.compile(r"[a-z][a-z0-9-]*$")
 # 旋钮名多是驼峰（numCores、fifoDepth）。原来只认小写，`{{knob.numCores}}` 对不上就原样
 # 留在命令里照跑；现在认驼峰，写得像占位符却对不上的一律报错
-HOLE = re.compile(r"{{\s*([a-z][A-Za-z0-9_.]*)\s*}}")
+# 依赖名照包名，带短横（`{{dep.ttsky25a-tinyqv}}`），只在 dep. 后面放开
+HOLE = re.compile(r"{{\s*(dep\.[a-z][a-z0-9-]*|[a-z][A-Za-z0-9_.]*)\s*}}")
 LOOKS = re.compile(r"{{[^{}]*}}")
 
 
@@ -110,12 +111,21 @@ def plan(pkg: Pkg, name: str) -> list[str]:
     return order
 
 
-def holes(pkg: Pkg, vals, out) -> dict:
+def _dep(pkgs: dict[str, Pkg] | None, n: str) -> str:
+    if not pkgs or n not in pkgs:
+        raise Bad(f"XR-TASK-003 {{{{dep.{n}}}}}：这次的工作区里没有包 {n}")
+    return str(pkgs[n].root)
+
+
+def holes(pkg: Pkg, vals, out, pkgs: dict[str, Pkg] | None = None) -> dict:
     """占位符只读，且只有这几个。给不了的就报错，不静默留原样。
 
     `defines` 用到才算：它要展开源码，而生成器类上游的 setup 任务跑之前源码还不存在。
     """
     d = {"name": pkg.name, "root": str(pkg.root), "out": str(out)}
+    # 依赖在哪由这次的工作区定：CI 里依赖克隆在别处，不一定是本仓的邻居。只认清单里声明过的依赖
+    for n in pkg.ip.get("deps") or {}:
+        d[f"dep.{n}"] = lambda n=n: _dep(pkgs, n)
     for k, v in (vals or {}).items():
         d[f"knob.{k}"] = str(getattr(v, "value", v))
     # 生成器类的上游要的是它自己那套 `-D` 串：Vortex 的 gen_config.py 收
@@ -153,13 +163,13 @@ def fill(cmd: str, hole: dict[str, str], who: str) -> str:
 
 
 def run(pkg: Pkg, name: str, vals, out, dry: bool = False,
-        secs: int | None = None) -> list[tuple[str, str]]:
+        secs: int | None = None, pkgs: dict[str, Pkg] | None = None) -> list[tuple[str, str]]:
     """跑任务。返回 [(名字, 结果)]，`dry` 只打印不跑。
 
     时限：调用方给的（`test.upstream` 那一条的 timeout）优先，其次任务自己的，都没有是 1800 秒。
     """
     got = all_of(pkg)
-    hole = holes(pkg, vals, out)
+    hole = holes(pkg, vals, out, pkgs)
     done = []
     for step in plan(pkg, name):
         if step not in got:

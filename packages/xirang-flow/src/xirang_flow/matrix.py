@@ -206,7 +206,7 @@ def run(pkg: Pkg, index: dict[str, Pkg], *, out: pathlib.Path,
                 if u.get("task"):
                     try:
                         tasks.run(pkg, u["task"], vals, work / "up" / f"{u['name']}{lbl}",
-                                  secs=int(u.get("timeout", 1800)))
+                                  secs=u.get("timeout"), pkgs=index)
                     except Bad as ex:
                         bad = True
                         notes.append(f"上游 {u['name']}：{ex}")

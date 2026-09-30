@@ -58,11 +58,11 @@ def core_asm(res: Resolved, pkgs: dict[str, Pkg], out: pathlib.Path, extra=()) -
             "includes": [], "root": None, "libdirs": []}
 
 
-def core_foreign(pkg: Pkg, vals, out: pathlib.Path) -> dict:
+def core_foreign(pkg: Pkg, vals, out: pathlib.Path, pkgs: dict[str, Pkg] | None = None) -> dict:
     """黑盒：先跑它自己的 setup（生成器类上游的源码要先生成才有），再按解出的配置取视图。"""
     e = pkg.foreign_emit()
     if s := e.get("setup"):
-        tasks.run(pkg, s, vals, pkg.root / "build")
+        tasks.run(pkg, s, vals, pkg.root / "build", pkgs=pkgs)
     knobs = foreign.knobs_of(vals)
     src = foreign.sources(pkg, "syn", knobs)
     rst = e.get("reset") or {}
@@ -146,7 +146,7 @@ def run(pkg: Pkg, res: Resolved, pkgs: dict[str, Pkg], out: pathlib.Path,
     if cp.is_assembly:
         core = core_asm(res, pkgs, work, extra)
     elif cp.foreign_emit() is not None:
-        core = core_foreign(cp, res.instances[0].values, work)
+        core = core_foreign(cp, res.instances[0].values, work, pkgs)
     else:
         raise Bad(f"XR-SPEC-001 {cp.name} 是叶子 IP：本版 asic 只收装配与黑盒，"
                   f"叶子先套一层装配")

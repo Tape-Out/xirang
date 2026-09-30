@@ -272,7 +272,7 @@ def cmd_run(args) -> int:
         return 0
     vals = resolve_pkg(pk, {}, f"{pk.path} (default)", None, _sets(args, pk))
     out = pathlib.Path(args.out or (pk.root / "build"))
-    for name, how in tasks.run(pk, args.task, vals, out, dry=args.plan):
+    for name, how in tasks.run(pk, args.task, vals, out, dry=args.plan, pkgs=idx):
         print(f"  {name:16} {how}")
     return 0
 

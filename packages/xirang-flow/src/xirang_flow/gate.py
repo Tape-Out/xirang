@@ -85,7 +85,7 @@ def assembly(pkg: Pkg, index: dict[str, Pkg], roots: list[pathlib.Path], *,
             if rows:
                 did.append(f"自检 {len(rows)} 个")
             notes += [f"{r.label}：{r.note}" for r in rows if r.mark is Mark.bad]
-            notes += _task_tests(pkg, here, lbl, flat, did)
+            notes += _task_tests(pkg, here, lbl, flat, did, index)
         ks = " ".join(f"{k}={v}" for k, v in sorted(ov.items()))
         rep.rows.append(Row(lbl, Mark.bad if notes else Mark.ok,
                             "；".join(notes) if notes else
@@ -94,7 +94,7 @@ def assembly(pkg: Pkg, index: dict[str, Pkg], roots: list[pathlib.Path], *,
 
 
 def _task_tests(pkg: Pkg, here: pathlib.Path, lbl: str, flat: dict,
-                did: list[str]) -> list[str]:
+                did: list[str], index: dict[str, Pkg] | None = None) -> list[str]:
     """装配写的任务形式的测试：整片测试要在交付的那份 Verilog 上跑，不在 BSV 里跑。
 
     退出码就是判据。取值按点号路径给占位符（`{{knob.sw0.ports}}`）。
@@ -109,7 +109,7 @@ def _task_tests(pkg: Pkg, here: pathlib.Path, lbl: str, flat: dict,
         did.append(u["name"])
         try:
             tasks.run(pkg, u["task"], flat, here / "up" / u["name"],
-                      secs=u.get("timeout"))
+                      secs=u.get("timeout"), pkgs=index)
         except Bad as ex:
             bad.append(f"{u['name']}：{ex}")
     return bad

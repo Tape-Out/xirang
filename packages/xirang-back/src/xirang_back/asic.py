@@ -14,8 +14,10 @@ from .ecc import WORKSPACE, oss_cad, pdk_root, workspace
 from .tools import ToolError, need
 from .verilog import elaborate
 
-# ecc 的预设。syn_sta 只到综合后时序；rtl2gds 走完布局布线出 GDS
+# 清单里写的流程。syn_sta 只到综合后时序；rtl2gds 走完布局布线、寄生提取、布线后时序、DRC、LVS 到 Harden。
+# ecc 自 alpha.12 起预设只剩这两个；harden 与 rcx 是它之前给全流程与「加寄生」起的名字，照 rtl2gds 跑
 FLOWS = ("syn_sta", "rtl2gds", "harden", "rcx")
+PRESET = {"harden": "rtl2gds", "rcx": "rtl2gds"}
 
 _ID = r"(?:\\\S+|[A-Za-z_][\w$]*)"
 MODULE = re.compile(rf"^module\s+({_ID})\s*\(", re.M)
@@ -150,7 +152,7 @@ def ecc_toml(name: str, top: str, rtl: str, clock: str, mhz: float, flow: str,
     if flow not in FLOWS:
         raise ToolError(f"ecc 没有预设 {flow}，只有 {FLOWS}")
     return ECC_TOML.format(name=name, top=top, rtl=rtl, clock=clock,
-                           mhz=float(mhz), flow=flow, pdk=pdk)
+                           mhz=float(mhz), flow=PRESET.get(flow, flow), pdk=pdk)
 
 
 def run_ecc(out: pathlib.Path, secs: int = 6 * 3600) -> subprocess.CompletedProcess:

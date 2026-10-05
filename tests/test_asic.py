@@ -235,6 +235,9 @@ def test_ecc_toml():
     assert 'preset = "rtl2gds"' in t and 'rtl = ["to_x.v"]' in t
     # alpha.12 不认 [flow].run，工作区名改由命令行给
     assert "run =" not in t
+    # harden 与 rcx 是 alpha.12 之前的预设名，现在的全流程叫 rtl2gds
+    for old in ("harden", "rcx"):
+        assert 'preset = "rtl2gds"' in back.ecc_toml("x", "x", "x.v", "clock", 50, old, "/pdk")
     with pytest.raises(ToolError):
         back.ecc_toml("x", "x", "x.v", "clock", 50, "gds", "/pdk")
 

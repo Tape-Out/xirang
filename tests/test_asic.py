@@ -283,6 +283,35 @@ def test_gate_blocks_negative_slack(tmp_path):
     assert got == {"XR-ASIC-006": False, "XR-ASIC-007": True}
 
 
+def test_gate_unproven_lec_is_not_a_failed_run(tmp_path):
+    fake_run(tmp_path / "r", 1.0)
+    base = tmp_path / "r" / "default"
+    flow = json.loads((base / "home/flow.json").read_text())
+    flow["steps"] += [{"name": "lec", "tool": "yosys_lec", "state": "Incomplete", "runtime": "0:4:8"},
+                      {"name": "Floorplan", "tool": "ecc", "state": "Success", "runtime": "0:0:7"}]
+    (base / "home/flow.json").write_text(json.dumps(flow))
+    (base / "lec_yosys_lec/report").mkdir(parents=True)
+    (base / "lec_yosys_lec/report/equiv_status.rpt").write_text(
+        "Found 132 $equiv cells in equiv:\n  Of those cells 67 are proven and 65 are unproven.\n")
+    rep = back.ecc_report(tmp_path / "r", "to_x")
+    assert rep["ok"] and rep["lec"] == [{"step": "lec", "proven": 67, "unproven": 65}]
+    pk = put(tmp_path, "t", asic={"mhz": 50})
+    assert [(c, b) for c, _, b in gate(pk, rep)] == [("XR-ASIC-008", False)]
+    pk = put(tmp_path, "t", asic={"mhz": 50}, diagnostics={"XR-ASIC-008": "error"})
+    assert [(c, b) for c, _, b in gate(pk, rep)] == [("XR-ASIC-008", True)]
+    # 没留下统计的比对步骤停了，就是普通的没跑通
+    (base / "lec_yosys_lec/report/equiv_status.rpt").unlink()
+    rep = back.ecc_report(tmp_path / "r", "to_x")
+    assert not rep["ok"] and [c for c, _, b in gate(pk, rep) if b] == ["XR-ASIC-005"]
+    # 停在比对上、后面还没跑：接着跑的那一步是它后面的那个
+    flow["steps"][-1]["state"] = "Unstart"
+    (base / "home/flow.json").write_text(json.dumps(flow))
+    assert back._after_unproven(tmp_path / "r") is None
+    (base / "lec_yosys_lec/report/equiv_status.rpt").write_text(
+        "  Of those cells 67 are proven and 65 are unproven.\n")
+    assert back._after_unproven(tmp_path / "r") == "Floorplan"
+
+
 def test_gate_failed_step(tmp_path):
     fake_run(tmp_path / "r", 1.0, state="Failed")
     rep = back.ecc_report(tmp_path / "r", "to_x")

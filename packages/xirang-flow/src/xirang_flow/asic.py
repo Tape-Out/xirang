@@ -104,9 +104,14 @@ def gate(pkg: Pkg, rep: dict) -> list[tuple[str, str, bool]]:
     """ecc 的结果过诊断闸门。返回 [(检查号, 说明, 挡不挡)]。"""
     layers = [("包 ip.yaml", pkg.ip.get("diagnostics") or {})]
     hits = []
+    soft = {x["step"] for x in rep.get("lec") or []}
     if not rep.get("ok"):
-        bad = [s["name"] for s in rep.get("steps", []) if s.get("state") != "Success"]
+        bad = [s["name"] for s in rep.get("steps", [])
+               if s.get("state") != "Success" and s["name"] not in soft]
         hits.append(("XR-ASIC-005", f"ecc 没跑通：{bad or '没有步骤记录'}"))
+    for x in rep.get("lec") or []:
+        hits.append(("XR-ASIC-008", f"{x['step']} 没证完：{x['unproven']} 个比对点未证出，"
+                                    f"{x['proven']} 个证出；后面的步骤照跑了"))
     t = rep.get("timing") or {}
     wns = (t.get("setup") or {}).get("wns")
     if wns is not None and wns < 0:

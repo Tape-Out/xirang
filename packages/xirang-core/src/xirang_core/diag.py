@@ -74,6 +74,7 @@ CHECKS: dict[str, Check] = dict([
     _c("XR-ASIC-005", Level.error, "展平、自检或 ecc 没跑通"),
     _c("XR-ASIC-006", Level.error, "建立时间没收敛：最差裕量为负"),
     _c("XR-ASIC-007", Level.error, "保持时间没收敛：最差裕量为负"),
+    _c("XR-ASIC-008", Level.warn, "ecc 的等价比对没证完：没证出等价，也没证出不等价"),
     _c("XR-AREA-001", Level.info, "价目表量的是另一份生成产物"),
     _c("XR-AREA-002", Level.info, "参数改了，量出来的面积不变"),
     _c("XR-AREA-003", Level.info, "改这个旋钮，面积预测不动"),

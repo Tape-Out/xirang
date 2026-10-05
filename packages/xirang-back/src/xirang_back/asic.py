@@ -9,6 +9,7 @@ import os
 import pathlib
 import re
 import subprocess
+import time
 
 from .ecc import WORKSPACE, oss_cad, pdk_root, workspace
 from .tools import ToolError, need
@@ -162,11 +163,51 @@ def run_ecc(out: pathlib.Path, secs: int = 6 * 3600) -> subprocess.CompletedProc
     env = dict(os.environ)
     if (cad := oss_cad()) is not None:
         env["CHIPCOMPILER_OSS_CAD_DIR"] = cad
+    cmd = [need("ecc"), "run", "--workspace", WORKSPACE]
+    end = time.monotonic() + secs
     try:
-        return subprocess.run([need("ecc"), "run", "--workspace", WORKSPACE], cwd=str(out), env=env,
-                              capture_output=True, text=True, timeout=secs)
+        r = subprocess.run(cmd, cwd=str(out), env=env, capture_output=True, text=True, timeout=secs)
+        # 等价比对没证完时 ecc 停在那一步。那是「没证出来」而不是「证出不等价」，照样把后面的步骤跑完，
+        # 比对的结果原样留在报告里由闸门去判
+        for _ in range(4):
+            nxt = _after_unproven(out)
+            if nxt is None:
+                break
+            r = subprocess.run([*cmd, "--from", nxt], cwd=str(out), env=env, capture_output=True,
+                               text=True, timeout=max(1, end - time.monotonic()))
+        return r
     except subprocess.TimeoutExpired:
         raise ToolError(f"ecc 超过 {secs} 秒还没结束") from None
+
+
+UNPROVEN = re.compile(r"Of those cells (\d+) are proven and (\d+) are unproven")
+
+
+def _lec(base: pathlib.Path, step: dict) -> dict | None:
+    """一步等价比对停下来的原因：证出与没证出的比对点各几个。不是比对步骤、或没留下这份统计的，返回 None。"""
+    if "lec" not in str(step.get("tool", "")).lower():
+        return None
+    try:
+        txt = (base / f"{step['name']}_{step['tool']}" / "report" / "equiv_status.rpt").read_text(
+            encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    m = UNPROVEN.search(txt)
+    return {"step": step["name"], "proven": int(m.group(1)), "unproven": int(m.group(2))} if m else None
+
+
+def _after_unproven(out: pathlib.Path) -> str | None:
+    """流程若停在一步没证完的等价比对上，返回它后面那一步的名字。"""
+    base = workspace(out)
+    steps = (_json(base / "home" / "flow.json") or {}).get("steps", [])
+    for k, s in enumerate(steps):
+        if s.get("state") == "Success":
+            continue
+        if s.get("state") == "Incomplete" and _lec(base, s) and k + 1 < len(steps) \
+                and steps[k + 1].get("state") == "Unstart":
+            return steps[k + 1]["name"]
+        return None
+    return None
 
 
 def _json(p: pathlib.Path):
@@ -183,8 +224,12 @@ def ecc_report(out: pathlib.Path, top: str) -> dict:
     steps = [{"name": s.get("name"), "tool": s.get("tool"), "state": s.get("state"),
               "runtime": s.get("runtime"), "peak_mb": s.get("peak memory (mb)")}
              for s in flow.get("steps", [])]
+    lec = [x for s in steps if s["state"] != "Success" and (x := _lec(base, s))]
+    soft = {x["step"] for x in lec}
     rep: dict = {"steps": steps, "ok": bool(steps) and all(
-        s["state"] == "Success" for s in steps)}
+        s["state"] == "Success" or s["name"] in soft for s in steps)}
+    if lec:
+        rep["lec"] = lec
     for s in steps:
         d = base / f"{s['name']}_{s['tool']}"
         if (st := _json(d / "feature" / f"{s['name']}_stat.json")) is not None:

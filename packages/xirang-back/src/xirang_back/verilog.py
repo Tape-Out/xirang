@@ -38,7 +38,7 @@ def _under(paths, root: pathlib.Path | None):
 
 
 def script(files, top: str, params: dict, out: pathlib.Path,
-           defines=(), includes=(), passes=()) -> str:
+           defines=(), includes=(), passes=(), sv=()) -> str:
     """生成的 yosys 脚本。单独一个函数，好让判据不必真的跑 yosys 就能查。
 
     宏要跟着一起给：picorv32 的 rvfi 那 177 根端口在 `RISCV_FORMAL` 里，不给宏
@@ -46,7 +46,7 @@ def script(files, top: str, params: dict, out: pathlib.Path,
     """
     d = ("".join(f" -D{x}" for x in defines)
          + "".join(f" -I{x}" for x in includes))
-    lines = [f"read_verilog{d} {f}" for f in files]
+    lines = [f"read_verilog{' -sv' if f in sv else ''}{d} {f}" for f in files]
     if params:
         sets = " ".join(f"-set {k} {v}" for k, v in sorted(params.items()))
         lines.append(f"chparam {sets} {top}")
@@ -66,7 +66,8 @@ def elaborate(files, top: str, params: dict, out: pathlib.Path,
     """
     out.parent.mkdir(parents=True, exist_ok=True)
     files = list(files)
-    here = root
+    here, mixed = root, False
+    direct = ()
     # 按模块名找文件（`-y`）yosys 的 read_verilog 不认，sv2v 认
     if libdirs or any(str(f).endswith(".sv") for f in files):
         readmem(files, includes, out.parent)
@@ -74,18 +75,35 @@ def elaborate(files, top: str, params: dict, out: pathlib.Path,
         if cut:
             print(f"  抹掉 {cut} 段 translate_off（上游标明不进综合）")
         includes = list(includes) + extra
-        files = [to_v2005(files, out.with_suffix(".sv2v.v"), top, defines,
-                          includes, secs // 2, libdirs)]
-        defines = includes = ()   # 宏与 include 在翻译那一步就处理掉了
+        # 只有 .sv 过 sv2v。它把非 ANSI 端口上带初值的寄存器（`output q; reg q = 0;`）翻成
+        # 一条恒为初值的连续赋值，Verilog 文件过它一遍，这种寄存器就再也不动了，而且不报错
+        sv = files if libdirs else [f for f in files if str(f).endswith(".sv")]
+        rest = [f for f in files if f not in sv]
+        conv = to_v2005(sv, out.with_suffix(".sv2v.v"), top if _has(sv, top) else None,
+                        defines, includes, secs // 2, libdirs)
         here = out.parent
+        # 剩下的 Verilog 直接给 yosys。经工作目录里的一个链接去读，路径才是相对的（理由见下）
+        if rest and root is not None:
+            (here / "_src").unlink(missing_ok=True)
+            (here / "_src").symlink_to(pathlib.Path(root).resolve(), target_is_directory=True)
+            via = pathlib.Path("_src")
+            rest = [r if r.is_absolute() else via / r for r in _under(rest, root)]
+            includes = [i if i.is_absolute() else via / i for i in _under(includes, root)]
+        # 混着 .sv 的上游，.v 里也常有 SystemVerilog 的写法（KianV 的 '0）
+        direct = tuple(rest)
+        files = [pathlib.Path(conv.name), *rest]
+        if not rest:
+            defines = includes = ()   # 宏与 include 在翻译那一步就处理掉了
+        here, mixed = out.parent, True
     # yosys 把源文件路径写进函数局部线的名字（`\f$func$<路径>:<行>$<序号>`），
     # 绝对路径于是漏进产物：同一份配置换个输出目录就生成不同的 Verilog，摘要对不上。
     # 在一个固定的基准目录下跑，只递相对路径，产物才跟目录无关
-    rel = _under(files, here)
+    # 混着的那一支，路径上面已经相对工作目录写好了：再解一遍会顺着链接回到绝对路径
+    rel, inc = (files, includes) if mixed else (_under(files, here), _under(includes, here))
     try:
         r = subprocess.run([need("yosys"), "-q", "-p",
                             script(rel, top, params, out.resolve(),
-                                   defines, _under(includes, here), passes)],
+                                   defines, inc, passes, direct)],
                            capture_output=True, text=True, timeout=secs,
                            cwd=str(here) if here else None)
     except subprocess.TimeoutExpired:
@@ -195,6 +213,18 @@ def strip_sim(files, work: pathlib.Path):
         out.append(dst)
         extra.add(f.parent)
     return out, cut, sorted(extra)
+
+
+def _has(files, top: str) -> bool:
+    """这些文件里有没有定义 `top`：sv2v 的 --top 找不到模块会报错。"""
+    pat = re.compile(rf"^\s*module\s+{re.escape(top)}\b", re.M)
+    for f in files:
+        try:
+            if pat.search(pathlib.Path(f).read_text(encoding="utf-8", errors="replace")):
+                return True
+        except OSError:
+            pass
+    return False
 
 
 def to_v2005(files, out: pathlib.Path, top: str | None = None,

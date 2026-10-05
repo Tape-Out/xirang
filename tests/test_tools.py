@@ -64,6 +64,12 @@ def main() -> int:
     # 只 hierarchy 不 proc，yosys 自己会警告「进程不一定映射得回 always 块」
     if "proc" not in sc:
         bad.append("没有 proc")
+    # 额外的几步插在 proc 与写出之间，不给就没有
+    if "opt_mem" in sc:
+        bad.append("没要的步骤进了脚本")
+    sc = script(["a.v"], "top", {}, pathlib.Path("o.v"), passes=("opt", "opt_mem"))
+    if not sc.index("proc") < sc.index("; opt;") < sc.index("opt_mem") < sc.index("write_verilog"):
+        bad.append("额外的步骤没排在 proc 与写出之间")
 
     # 宏要跟着一起给：picorv32 的 rvfi 端口在 `RISCV_FORMAL` 里，不给宏它们
     # 压根不存在——而「端口少了一组」不会报错，只会在接线时变成对不上的名字

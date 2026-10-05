@@ -78,12 +78,16 @@ def rename(text: str, top: str, prefix: str, top_as: str | None = None) -> tuple
     return out, new
 
 
+# 只过 proc 的话，存储阵列写出来是逐位的写口：带 TLB 的核在 Verilator 上慢四十倍，交付的那份要仿真得动
+TIDY = ("opt", "memory_share", "opt_mem")
+
+
 def flatten(files, top: str, out: pathlib.Path, prefix: str, top_as: str | None = None,
             params: dict | None = None, defines=(), includes=(), root=None,
             libdirs=(), secs: int = 1800) -> tuple[pathlib.Path, str]:
     """所有模块写进一个文件：参数展开、层次保留、名字加前缀。返回文件与顶层的新名字。"""
     raw = out.with_suffix(".raw.v")
-    elaborate(files, top, params or {}, raw, defines, includes, root, secs, libdirs)
+    elaborate(files, top, params or {}, raw, defines, includes, root, secs, libdirs, TIDY)
     txt, names = rename(raw.read_text(encoding="utf-8"), top, prefix, top_as)
     out.write_text(txt, encoding="utf-8")
     raw.unlink()

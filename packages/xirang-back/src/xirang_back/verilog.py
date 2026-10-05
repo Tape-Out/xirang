@@ -38,7 +38,7 @@ def _under(paths, root: pathlib.Path | None):
 
 
 def script(files, top: str, params: dict, out: pathlib.Path,
-           defines=(), includes=()) -> str:
+           defines=(), includes=(), passes=()) -> str:
     """生成的 yosys 脚本。单独一个函数，好让判据不必真的跑 yosys 就能查。
 
     宏要跟着一起给：picorv32 的 rvfi 那 177 根端口在 `RISCV_FORMAL` 里，不给宏
@@ -50,14 +50,14 @@ def script(files, top: str, params: dict, out: pathlib.Path,
     if params:
         sets = " ".join(f"-set {k} {v}" for k, v in sorted(params.items()))
         lines.append(f"chparam {sets} {top}")
-    lines += [f"hierarchy -top {top} -check", "proc", "opt_clean",
+    lines += [f"hierarchy -top {top} -check", "proc", *passes, "opt_clean",
               f"write_verilog -noattr {out}"]
     return "; ".join(lines)
 
 
 def elaborate(files, top: str, params: dict, out: pathlib.Path,
               defines=(), includes=(), root: pathlib.Path | None = None,
-              secs: int = 1800, libdirs=()) -> pathlib.Path:
+              secs: int = 1800, libdirs=(), passes=()) -> pathlib.Path:
     """写出展开后的 Verilog，返回它的路径。
 
     yosys 读不动 SystemVerilog 的包与结构（`package` 一行就是 syntax error），
@@ -85,7 +85,7 @@ def elaborate(files, top: str, params: dict, out: pathlib.Path,
     try:
         r = subprocess.run([need("yosys"), "-q", "-p",
                             script(rel, top, params, out.resolve(),
-                                   defines, _under(includes, here))],
+                                   defines, _under(includes, here), passes)],
                            capture_output=True, text=True, timeout=secs,
                            cwd=str(here) if here else None)
     except subprocess.TimeoutExpired:

@@ -58,8 +58,15 @@ root = "{pdk}"
 
 [flow]
 preset = "syn_sta"
-run = "default"
 """
+
+WORKSPACE = "default"
+
+
+def workspace(out: pathlib.Path) -> pathlib.Path:
+    """ecc 这次运行的工作区。alpha.12 起直接建在工程目录下，之前在 runs/ 下。"""
+    old = out / "runs" / WORKSPACE
+    return old if old.is_dir() and not (out / WORKSPACE / "home").is_dir() else out / WORKSPACE
 
 
 def _run(cmd, cwd=None, env=None):
@@ -143,8 +150,8 @@ def synth(out: pathlib.Path, top: str, name: str,
     env = dict(os.environ)
     if (cad := oss_cad()) is not None:
         env["CHIPCOMPILER_OSS_CAD_DIR"] = cad
-    r = _run(["ecc", "run"], cwd=str(out), env=env)
-    log = out / "runs" / "default" / "Synthesis_yosys" / "log" / "Synthesis.log"
+    r = _run(["ecc", "run", "--workspace", WORKSPACE], cwd=str(out), env=env)
+    log = workspace(out) / "Synthesis_yosys" / "log" / "Synthesis.log"
     if not log.exists():
         print((r.stdout or r.stderr)[-1500:])
         return None

@@ -233,12 +233,14 @@ def test_ecc_toml():
     t = back.ecc_toml("to-x", "to_x", "to_x.v", "clock", 50, "rtl2gds", "/pdk")
     assert 'clock_port = "clock"' in t and "frequency_mhz = 50.0" in t
     assert 'preset = "rtl2gds"' in t and 'rtl = ["to_x.v"]' in t
+    # alpha.12 不认 [flow].run，工作区名改由命令行给
+    assert "run =" not in t
     with pytest.raises(ToolError):
         back.ecc_toml("x", "x", "x.v", "clock", 50, "gds", "/pdk")
 
 
-def fake_run(out: pathlib.Path, wns: float, hold: float = 0.2, state="Success"):
-    base = out / "runs/default"
+def fake_run(out: pathlib.Path, wns: float, hold: float = 0.2, state="Success", base="default"):
+    base = out / base
     (base / "home").mkdir(parents=True)
     (base / "home/flow.json").write_text(json.dumps({"steps": [
         {"name": "Synthesis", "tool": "yosys", "state": state, "runtime": "0:1:0"}]}))
@@ -262,6 +264,9 @@ def test_ecc_report(tmp_path):
     assert r["timing"]["setup"]["wns"] == 3.5 and r["timing"]["step"] == "Synthesis"
     assert r["power_uw"] == {"dynamic_uw": 10.0, "leakage_uw": 1.0}
     assert r["checklist"]["status"] == "ready"
+    # alpha.12 之前的 ecc 把工作区放在 runs/ 下，照样读得到
+    fake_run(tmp_path / "old", -1.0, base="runs/default")
+    assert back.ecc_report(tmp_path / "old", "to_x")["timing"]["setup"]["wns"] == -1.0
 
 
 def test_gate_blocks_negative_slack(tmp_path):

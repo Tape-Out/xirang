@@ -10,7 +10,7 @@ import pathlib
 import re
 import subprocess
 
-from .ecc import oss_cad, pdk_root
+from .ecc import WORKSPACE, oss_cad, pdk_root, workspace
 from .tools import ToolError, need
 from .verilog import elaborate
 
@@ -79,7 +79,8 @@ def rename(text: str, top: str, prefix: str, top_as: str | None = None) -> tuple
 
 
 # 只过 proc 的话，存储阵列写出来是逐位的写口：带 TLB 的核在 Verilator 上慢四十倍，交付的那份要仿真得动
-TIDY = ("opt", "memory_share", "opt_mem")
+# 上游写在 initial 里的 $display 会被 yosys 留成 $print 单元，一路带进综合后的网表；断言单元同理
+TIDY = ("opt", "memory_share", "opt_mem", "delete t:$print t:$check")
 
 
 def flatten(files, top: str, out: pathlib.Path, prefix: str, top_as: str | None = None,
@@ -140,7 +141,6 @@ root = "{pdk}"
 
 [flow]
 preset = "{flow}"
-run = "default"
 """
 
 
@@ -161,7 +161,7 @@ def run_ecc(out: pathlib.Path, secs: int = 6 * 3600) -> subprocess.CompletedProc
     if (cad := oss_cad()) is not None:
         env["CHIPCOMPILER_OSS_CAD_DIR"] = cad
     try:
-        return subprocess.run([need("ecc"), "run"], cwd=str(out), env=env,
+        return subprocess.run([need("ecc"), "run", "--workspace", WORKSPACE], cwd=str(out), env=env,
                               capture_output=True, text=True, timeout=secs)
     except subprocess.TimeoutExpired:
         raise ToolError(f"ecc 超过 {secs} 秒还没结束") from None
@@ -174,9 +174,9 @@ def _json(p: pathlib.Path):
         return None
 
 
-def ecc_report(out: pathlib.Path, top: str, run: str = "default") -> dict:
+def ecc_report(out: pathlib.Path, top: str) -> dict:
     """从 ecc 的结构化产物取数，不读日志。时序取最后一个出了时序的步骤。"""
-    base = out / "runs" / run
+    base = workspace(out)
     flow = _json(base / "home" / "flow.json") or {}
     steps = [{"name": s.get("name"), "tool": s.get("tool"), "state": s.get("state"),
               "runtime": s.get("runtime"), "peak_mb": s.get("peak memory (mb)")}

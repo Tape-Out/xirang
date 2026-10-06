@@ -151,6 +151,9 @@ TB_V = """module tb;
   initial begin
     io_in[1:0] = 2'b10;
     #1;
+    if (io_oe !== 66'h0) begin $display("FAIL oe in reset %h", io_oe); $finish; end
+    reset = 0;
+    #1;
     if (io_oe !== 66'h434) begin $display("FAIL oe %h", io_oe); $finish; end
     if (io_out !== 66'h414) begin $display("FAIL out %h", io_out); $finish; end
     io_in[1:0] = 2'b01;

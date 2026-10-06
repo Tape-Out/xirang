@@ -1,7 +1,8 @@
 """五口顶层：把设计的端口排进 MPC-Frame 的 66 位 payload。
 
 契约照 `mpc-frame/docs/cn/io-map.md`：`io_oe[n]` 为 1 时设计驱动 `io_out[n]`，为 0 时
-释放；每一位都要有确定值。端口怎么排只看清单的 `asic.pads`，不按名字猜——gpio 叫
+释放；每一位都要有确定值。复位期间全部释放：单颗上板时按住复位就让出了引脚，在板烧 Flash
+靠的是这个，上电过程里也不与片外器件对顶。端口怎么排只看清单的 `asic.pads`，不按名字猜——gpio 叫
 `gpio_dir`、spi 叫 `io_oe`、i2c 是开漏的 `scl_pull`，猜不齐。
 """
 import dataclasses
@@ -211,7 +212,7 @@ def render(pl: Plan, top: str, core: str, ports, width: int = WIDTH) -> str:
     L.append(",\n".join(conns))
     L.append("  );")
     L.append(f"  assign io_out = {_cat(outs[::-1])};")
-    L.append(f"  assign io_oe  = {_cat(oes[::-1])};")
+    L.append(f"  assign io_oe  = reset ? {width}'d0 : {_cat(oes[::-1])};")
     L.append("endmodule")
     return "\n".join(L) + "\n"
 

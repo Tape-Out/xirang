@@ -148,12 +148,18 @@ preset = "{flow}"
 
 
 def ecc_toml(name: str, top: str, rtl: str, clock: str, mhz: float, flow: str,
-             pdk: str) -> str:
-    """ecc 按 clock_port 与 frequency_mhz 自己生成 create_clock 与输入输出延迟。"""
+             pdk: str, util: float | None = None) -> str:
+    """ecc 按 clock_port 与 frequency_mhz 自己生成 create_clock 与输入输出延迟。
+
+    util 是布图的利用率（单元面积除以核区面积）：线太挤、布线不收敛的设计靠调低它给走线腾地方。
+    """
     if flow not in FLOWS:
         raise ToolError(f"ecc 没有预设 {flow}，只有 {FLOWS}")
-    return ECC_TOML.format(name=name, top=top, rtl=rtl, clock=clock,
-                           mhz=float(mhz), flow=PRESET.get(flow, flow), pdk=pdk)
+    s = ECC_TOML.format(name=name, top=top, rtl=rtl, clock=clock,
+                        mhz=float(mhz), flow=PRESET.get(flow, flow), pdk=pdk)
+    if util is not None:
+        s += f"\n[params.floorplan]\ncore_util = {float(util)}\n"
+    return s
 
 
 def run_ecc(out: pathlib.Path, secs: int = 6 * 3600) -> subprocess.CompletedProcess:

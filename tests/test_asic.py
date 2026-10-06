@@ -48,6 +48,9 @@ def test_asic_defaults(tmp_path):
 @pytest.mark.parametrize("bad", [
     {"mhz": 50, "frame": "caravel"},
     {"mhz": 50, "flow": "gds"},
+    {"mhz": 50, "util": 0},
+    {"mhz": 50, "util": 1.5},
+    {"mhz": 50, "util": True},
     {"frame": "mpc"},
     {"mhz": True},
     {"mhz": 0},
@@ -437,3 +440,11 @@ def test_readmem_files_follow_their_source(tmp_path):
     (tmp_path / "work/font.bin").unlink()
     with pytest.raises(ToolError, match="font.bin"):
         readmem([tmp_path / "src/rom/rom.v"], [], tmp_path / "work")
+
+
+def test_util_reaches_ecc():
+    from xirang_back import asic as back
+    plain = back.ecc_toml("x", "x", "x.v", "clock", 50, "rtl2gds", "/pdk")
+    assert "core_util" not in plain
+    s = back.ecc_toml("x", "x", "x.v", "clock", 50, "rtl2gds", "/pdk", 0.25)
+    assert s.startswith(plain) and "[params.floorplan]\ncore_util = 0.25\n" in s

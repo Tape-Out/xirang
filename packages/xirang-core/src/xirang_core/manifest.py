@@ -95,7 +95,7 @@ TOP_KEYS = {*DIR_KEYS,
             "bus", "instances", "connect", "pipe", "test", "diagnostics",
             "targets", "tasks", "guards", "profiles", "chip", "dt", "asic",
             "__path__"}
-ASIC_KEYS = {"core", "top", "frame", "mhz", "flow", "clock", "pads", "tie", "unused"}
+ASIC_KEYS = {"core", "top", "frame", "mhz", "flow", "util", "clock", "pads", "tie", "unused"}
 ASIC_FRAMES = {"mpc", "none"}
 # 与 xirang_back.asic.FLOWS 同一张表；core 不能 import back，test_asic 核两边一致
 ASIC_FLOWS = ("syn_sta", "rtl2gds", "harden", "rcx")
@@ -468,7 +468,7 @@ class Pkg:
             raise Bad(f"{self.path}: asic 有不认识的键 {sorted(unknown)}")
         out = {"core": a.get("core"), "top": a.get("top") or self.name.replace("-", "_"),
                "frame": a.get("frame", "mpc"), "mhz": a.get("mhz"),
-               "flow": a.get("flow", "syn_sta"), "clock": a.get("clock"),
+               "flow": a.get("flow", "syn_sta"), "util": a.get("util"), "clock": a.get("clock"),
                "pads": a.get("pads") or [], "tie": a.get("tie") or {},
                "unused": a.get("unused") or []}
         # 交付别的包（一个黑盒、一颗现成的装配）时写 core；它得在 deps 里，CI 才取得到
@@ -482,6 +482,9 @@ class Pkg:
         m = out["mhz"]
         if isinstance(m, bool) or not isinstance(m, (int, float)) or not 0 < m <= 2000:
             raise Bad(f"{self.path}: asic.mhz 要写目标主频（MHz，正数），收到 {m!r}")
+        u = out["util"]
+        if u is not None and (isinstance(u, bool) or not isinstance(u, (int, float)) or not 0.05 <= u <= 1):
+            raise Bad(f"{self.path}: asic.util 是布图的利用率，0.05 到 1，不写用 ecc 的默认值，收到 {u!r}")
         if out["flow"] not in ASIC_FLOWS:
             raise Bad(f"{self.path}: asic.flow 是 ecc 的预设，只有 {list(ASIC_FLOWS)}，"
                       f"收到 {out['flow']!r}")

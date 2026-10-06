@@ -92,7 +92,8 @@ def run(pkg: Pkg, index: dict[str, Pkg], *, out: pathlib.Path,
     src = [str(d) for q in index.values() for d in q.dirs("hwsrc")]
     work = out / "b"
     work.mkdir(parents=True, exist_ok=True)
-    has_bsv = any(d.is_dir() for d in pkg.dirs("hwsrc"))
+    # hwsrc 里也放黑盒自己带的 Verilog（适配模块、手写的通道），有 Bluespec 源码才走调度那几步
+    has_bsv = any(f.suffix in (".bsv", ".bs") for d in pkg.dirs("hwsrc") if d.is_dir() for f in d.iterdir())
     cap = pkg.name[:1].upper() + pkg.name[1:]
 
     rep = Matrix(name=pkg.name)

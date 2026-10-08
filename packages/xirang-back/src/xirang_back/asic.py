@@ -148,15 +148,18 @@ preset = "{flow}"
 
 
 def ecc_toml(name: str, top: str, rtl: str, clock: str, mhz: float, flow: str,
-             pdk: str, util: float | None = None) -> str:
+             pdk: str, util: float | None = None, skip: list[str] | None = None) -> str:
     """ecc 按 clock_port 与 frequency_mhz 自己生成 create_clock 与输入输出延迟。
 
     util 是布图的利用率（单元面积除以核区面积）：线太挤、布线不收敛的设计靠调低它给走线腾地方。
+    skip 是要跳过的步骤：大设计的等价比对能把托管机的内存吃满、跑到超时。写了就是全部要跳的，ecc 自己默认跳的不再算上。
     """
     if flow not in FLOWS:
         raise ToolError(f"ecc 没有预设 {flow}，只有 {FLOWS}")
     s = ECC_TOML.format(name=name, top=top, rtl=rtl, clock=clock,
                         mhz=float(mhz), flow=PRESET.get(flow, flow), pdk=pdk)
+    if skip:
+        s += "skip_steps = [" + ", ".join(f'"{x}"' for x in skip) + "]\n"
     if util is not None:
         s += f"\n[params.floorplan]\ncore_util = {float(util)}\n"
     return s

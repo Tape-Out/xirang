@@ -51,6 +51,8 @@ def test_asic_defaults(tmp_path):
     {"mhz": 50, "util": 0},
     {"mhz": 50, "util": 1.5},
     {"mhz": 50, "util": True},
+    {"mhz": 50, "skip": "lec"},
+    {"mhz": 50, "skip": ["route"]},
     {"frame": "mpc"},
     {"mhz": True},
     {"mhz": 0},
@@ -448,3 +450,15 @@ def test_util_reaches_ecc():
     assert "core_util" not in plain
     s = back.ecc_toml("x", "x", "x.v", "clock", 50, "rtl2gds", "/pdk", 0.25)
     assert s.startswith(plain) and "[params.floorplan]\ncore_util = 0.25\n" in s
+
+
+def test_skip_reaches_ecc(tmp_path):
+    from xirang_back import asic as back
+    assert put(tmp_path, "t", asic={"mhz": 50}).asic()["skip"] == []
+    assert put(tmp_path, "u", asic={"mhz": 50, "skip": ["lec", "postRouteLec"]}).asic()["skip"] == ["lec", "postRouteLec"]
+    plain = back.ecc_toml("x", "x", "x.v", "clock", 50, "rtl2gds", "/pdk")
+    assert "skip_steps" not in plain
+    s = back.ecc_toml("x", "x", "x.v", "clock", 50, "rtl2gds", "/pdk", skip=["lec", "postRouteLec"])
+    assert s == plain + 'skip_steps = ["lec", "postRouteLec"]\n'
+    flow = s.split("[flow]")[1]
+    assert flow.splitlines()[1:] == ['preset = "rtl2gds"', 'skip_steps = ["lec", "postRouteLec"]']

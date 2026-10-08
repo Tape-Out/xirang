@@ -95,7 +95,9 @@ TOP_KEYS = {*DIR_KEYS,
             "bus", "instances", "connect", "pipe", "test", "diagnostics",
             "targets", "tasks", "guards", "profiles", "chip", "dt", "asic",
             "__path__"}
-ASIC_KEYS = {"core", "top", "frame", "mhz", "flow", "util", "clock", "pads", "tie", "unused"}
+ASIC_KEYS = {"core", "top", "frame", "mhz", "flow", "util", "skip", "clock", "pads", "tie", "unused"}
+# ecc 只许跳过这三步：两道等价比对与时序优化
+ASIC_SKIPS = ("lec", "Timing optimization", "postRouteLec")
 ASIC_FRAMES = {"mpc", "none"}
 # 与 xirang_back.asic.FLOWS 同一张表；core 不能 import back，test_asic 核两边一致
 ASIC_FLOWS = ("syn_sta", "rtl2gds", "harden", "rcx")
@@ -468,7 +470,8 @@ class Pkg:
             raise Bad(f"{self.path}: asic 有不认识的键 {sorted(unknown)}")
         out = {"core": a.get("core"), "top": a.get("top") or self.name.replace("-", "_"),
                "frame": a.get("frame", "mpc"), "mhz": a.get("mhz"),
-               "flow": a.get("flow", "syn_sta"), "util": a.get("util"), "clock": a.get("clock"),
+               "flow": a.get("flow", "syn_sta"), "util": a.get("util"), "skip": a.get("skip") or [],
+               "clock": a.get("clock"),
                "pads": a.get("pads") or [], "tie": a.get("tie") or {},
                "unused": a.get("unused") or []}
         # 交付别的包（一个黑盒、一颗现成的装配）时写 core；它得在 deps 里，CI 才取得到
@@ -485,6 +488,9 @@ class Pkg:
         u = out["util"]
         if u is not None and (isinstance(u, bool) or not isinstance(u, (int, float)) or not 0.05 <= u <= 1):
             raise Bad(f"{self.path}: asic.util 是布图的利用率，0.05 到 1，不写用 ecc 的默认值，收到 {u!r}")
+        sk = out["skip"]
+        if not isinstance(sk, list) or any(x not in ASIC_SKIPS for x in sk):
+            raise Bad(f"{self.path}: asic.skip 是要跳过的后端步骤，只能从 {list(ASIC_SKIPS)} 里挑，收到 {sk!r}")
         if out["flow"] not in ASIC_FLOWS:
             raise Bad(f"{self.path}: asic.flow 是 ecc 的预设，只有 {list(ASIC_FLOWS)}，"
                       f"收到 {out['flow']!r}")

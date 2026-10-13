@@ -148,13 +148,11 @@ preset = "{flow}"
 
 
 def ecc_toml(name: str, top: str, rtl: str, clock: str, mhz: float, flow: str,
-             pdk: str, util: float | None = None, skip: list[str] | None = None,
-             signoff: dict[str, list[str]] | None = None) -> str:
+             pdk: str, util: float | None = None, skip: list[str] | None = None) -> str:
     """ecc 按 clock_port 与 frequency_mhz 自己生成 create_clock 与输入输出延迟。
 
     util 是布图的利用率（单元面积除以核区面积）：线太挤、布线不收敛的设计靠调低它给走线腾地方。
     skip 是要跳过的步骤：大设计的等价比对能把托管机的内存吃满、跑到超时。写了就是全部要跳的，ecc 自己默认跳的不再算上。
-    signoff 是时序分析要算的工艺角：ecc 默认十三组逐个算，十几万单元的设计在托管机的时限里算不完。
     """
     if flow not in FLOWS:
         raise ToolError(f"ecc 没有预设 {flow}，只有 {FLOWS}")
@@ -164,13 +162,20 @@ def ecc_toml(name: str, top: str, rtl: str, clock: str, mhz: float, flow: str,
         s += "skip_steps = [" + ", ".join(f'"{x}"' for x in skip) + "]\n"
     if util is not None:
         s += f"\n[params.floorplan]\ncore_util = {float(util)}\n"
-    if signoff:
-        rows = ", ".join(f'"{c}" = [' + ", ".join(f'"{x}"' for x in v) + "]" for c, v in signoff.items())
-        s += f"\n[params.sta]\nsignoff = [{{{rows}}}]\n"
     return s
 
 
-def run_ecc(out: pathlib.Path, secs: int = 6 * 3600) -> subprocess.CompletedProcess:
+def signoff_args(signoff: dict[str, list[str]] | None) -> list[str]:
+    """时序分析要算的工艺角，交给建工作区的那一次 ecc run。
+
+    ecc 默认十三组逐个算，十几万单元的设计在托管机的时限里算不完。不写进 ecc.toml：工程一级的列表型参数
+    会让 ecc run --from 崩；--set 只在建工作区时收，记在工作区里，后面接着跑的几次照用。
+    """
+    return ["--set", "sta.signoff=" + json.dumps([signoff])] if signoff else []
+
+
+def run_ecc(out: pathlib.Path, secs: int = 6 * 3600,
+            signoff: dict[str, list[str]] | None = None) -> subprocess.CompletedProcess:
     if pdk_root() is None:
         raise ToolError("找不到 PDK：设 XR_PDK_ROOT，或让 ecc 装进 "
                         "~/.local/share/ecc/pdks/<名>/<版本>")
@@ -180,7 +185,8 @@ def run_ecc(out: pathlib.Path, secs: int = 6 * 3600) -> subprocess.CompletedProc
     cmd = [need("ecc"), "run", "--workspace", WORKSPACE]
     end = time.monotonic() + secs
     try:
-        r = subprocess.run(cmd, cwd=str(out), env=env, capture_output=True, text=True, timeout=secs)
+        r = subprocess.run([*cmd, *signoff_args(signoff)], cwd=str(out), env=env, capture_output=True,
+                           text=True, timeout=secs)
         # 等价比对没证完时 ecc 停在那一步。那是「没证出来」而不是「证出不等价」，照样把后面的步骤跑完，
         # 比对的结果原样留在报告里由闸门去判
         for _ in range(4):

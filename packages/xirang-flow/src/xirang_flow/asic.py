@@ -199,14 +199,13 @@ def run(pkg: Pkg, res: Resolved, pkgs: dict[str, Pkg], out: pathlib.Path,
 
     if (pdk := ecc.pdk_root()) is not None:
         (out / "ecc.toml").write_text(back.ecc_toml(pkg.name, top, v.name, clock, mhz,
-                                                    flow, pdk, spec["util"], spec["skip"], spec["signoff"]),
-                                     encoding="utf-8")
+                                                    flow, pdk, spec["util"], spec["skip"]), encoding="utf-8")
     elif go:
         raise Bad("XR-ASIC-005 找不到 PDK：设 XR_PDK_ROOT，或让 ecc 装进 "
                   "~/.local/share/ecc/pdks/<名>/<版本>")
     if go:
         try:
-            r = back.run_ecc(out)
+            r = back.run_ecc(out, signoff=spec["signoff"])
         except ToolError as ex:
             raise Bad(f"XR-ASIC-005 {ex}") from None
         rep = back.ecc_report(out, top)

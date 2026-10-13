@@ -475,9 +475,10 @@ def test_signoff_reaches_ecc(tmp_path):
     two = {"MAX": ["RCworst"], "MIN": ["RCbest", "Cbest"]}
     assert put(tmp_path, "t", asic={"mhz": 50}).asic()["signoff"] is None
     assert put(tmp_path, "u", asic={"mhz": 50, "signoff": two}).asic()["signoff"] == two
-    plain = back.ecc_toml("x", "x", "x.v", "clock", 50, "rtl2gds", "/pdk")
-    assert "params.sta" not in plain
-    s = back.ecc_toml("x", "x", "x.v", "clock", 50, "rtl2gds", "/pdk", 0.25, signoff=two)
-    assert s.startswith(plain)
-    doc = tomllib.loads(s)
-    assert doc["params"] == {"floorplan": {"core_util": 0.25}, "sta": {"signoff": [two]}}
+    # 不进 ecc.toml（工程一级的列表型参数会让 ecc run --from 崩），由建工作区的那一次 ecc run 用 --set 带上
+    s = back.ecc_toml("x", "x", "x.v", "clock", 50, "rtl2gds", "/pdk", 0.25)
+    assert tomllib.loads(s)["params"] == {"floorplan": {"core_util": 0.25}}
+    assert back.signoff_args(None) == []
+    flag, kv = back.signoff_args(two)
+    key, _, val = kv.partition("=")
+    assert (flag, key) == ("--set", "sta.signoff") and json.loads(val) == [two]

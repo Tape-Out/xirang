@@ -53,6 +53,11 @@ def test_asic_defaults(tmp_path):
     {"mhz": 50, "util": True},
     {"mhz": 50, "skip": "lec"},
     {"mhz": 50, "skip": ["route"]},
+    {"mhz": 50, "signoff": ["MAX"]},
+    {"mhz": 50, "signoff": {}},
+    {"mhz": 50, "signoff": {"SLOW": ["RCworst"]}},
+    {"mhz": 50, "signoff": {"MAX": ["Rworst"]}},
+    {"mhz": 50, "signoff": {"MAX": []}},
     {"frame": "mpc"},
     {"mhz": True},
     {"mhz": 0},
@@ -462,3 +467,17 @@ def test_skip_reaches_ecc(tmp_path):
     assert s == plain + 'skip_steps = ["lec", "postRouteLec"]\n'
     flow = s.split("[flow]")[1]
     assert flow.splitlines()[1:] == ['preset = "rtl2gds"', 'skip_steps = ["lec", "postRouteLec"]']
+
+
+def test_signoff_reaches_ecc(tmp_path):
+    import tomllib
+    from xirang_back import asic as back
+    two = {"MAX": ["RCworst"], "MIN": ["RCbest", "Cbest"]}
+    assert put(tmp_path, "t", asic={"mhz": 50}).asic()["signoff"] is None
+    assert put(tmp_path, "u", asic={"mhz": 50, "signoff": two}).asic()["signoff"] == two
+    plain = back.ecc_toml("x", "x", "x.v", "clock", 50, "rtl2gds", "/pdk")
+    assert "params.sta" not in plain
+    s = back.ecc_toml("x", "x", "x.v", "clock", 50, "rtl2gds", "/pdk", 0.25, signoff=two)
+    assert s.startswith(plain)
+    doc = tomllib.loads(s)
+    assert doc["params"] == {"floorplan": {"core_util": 0.25}, "sta": {"signoff": [two]}}

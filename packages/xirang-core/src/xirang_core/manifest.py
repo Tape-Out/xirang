@@ -95,9 +95,12 @@ TOP_KEYS = {*DIR_KEYS,
             "bus", "instances", "connect", "pipe", "test", "diagnostics",
             "targets", "tasks", "guards", "profiles", "chip", "dt", "asic",
             "__path__"}
-ASIC_KEYS = {"core", "top", "frame", "mhz", "flow", "util", "skip", "clock", "pads", "tie", "unused"}
+ASIC_KEYS = {"core", "top", "frame", "mhz", "flow", "util", "skip", "signoff", "clock", "pads", "tie", "unused"}
 # ecc 只许跳过这三步：两道等价比对与时序优化
 ASIC_SKIPS = ("lec", "Timing optimization", "postRouteLec")
+# ecc 的时序签核：单元库的角配寄生参数的角，默认十三组全算
+ASIC_CORNERS = ("MAX", "WCL", "TYP", "MIN", "ML")
+ASIC_RC = ("Cworst", "RCworst", "Cbest", "RCbest", "TYPICAL")
 ASIC_FRAMES = {"mpc", "none"}
 # 与 xirang_back.asic.FLOWS 同一张表；core 不能 import back，test_asic 核两边一致
 ASIC_FLOWS = ("syn_sta", "rtl2gds", "harden", "rcx")
@@ -471,6 +474,7 @@ class Pkg:
         out = {"core": a.get("core"), "top": a.get("top") or self.name.replace("-", "_"),
                "frame": a.get("frame", "mpc"), "mhz": a.get("mhz"),
                "flow": a.get("flow", "syn_sta"), "util": a.get("util"), "skip": a.get("skip") or [],
+               "signoff": a.get("signoff"),
                "clock": a.get("clock"),
                "pads": a.get("pads") or [], "tie": a.get("tie") or {},
                "unused": a.get("unused") or []}
@@ -491,6 +495,12 @@ class Pkg:
         sk = out["skip"]
         if not isinstance(sk, list) or any(x not in ASIC_SKIPS for x in sk):
             raise Bad(f"{self.path}: asic.skip 是要跳过的后端步骤，只能从 {list(ASIC_SKIPS)} 里挑，收到 {sk!r}")
+        so = out["signoff"]
+        if so is not None and not (isinstance(so, dict) and so and all(
+                c in ASIC_CORNERS and isinstance(v, list) and v and all(x in ASIC_RC for x in v)
+                for c, v in so.items())):
+            raise Bad(f"{self.path}: asic.signoff 是时序分析要算的工艺角，单元库的角 {list(ASIC_CORNERS)} "
+                      f"各配一列寄生参数的角 {list(ASIC_RC)}，不写是 ecc 默认的十三组，收到 {so!r}")
         if out["flow"] not in ASIC_FLOWS:
             raise Bad(f"{self.path}: asic.flow 是 ecc 的预设，只有 {list(ASIC_FLOWS)}，"
                       f"收到 {out['flow']!r}")
